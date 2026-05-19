@@ -1,0 +1,4 @@
+raw_weather: data/raw/daily_temperature.csv
+raw_phenology: data/raw/obser_pheno_catalog_origin.xlsx
+china_boundary: data/boundary/china.json
+province_boundary: data/boundary/provinces.json

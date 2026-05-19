@@ -1,0 +1,82 @@
+sample:
+  n_splits: 5
+  seed: 20260328
+  min_test_samples: 2
+
+site:
+  n_splits: 5
+  min_test_samples: 2
+  min_test_sites: 2
+
+year:
+  min_test_samples: 2
+  folds:
+    - fold: 1
+      train_start: 1984
+      train_end: 1990
+      test_start: 1991
+      test_end: 1995
+    - fold: 2
+      train_start: 1984
+      train_end: 1995
+      test_start: 1996
+      test_end: 1998
+    - fold: 3
+      train_start: 1984
+      train_end: 1998
+      test_start: 1999
+      test_end: 2010
+
+dvr_batch:
+  seeds: [61]
+
+m1_v2_dvr:
+  epochs: 80
+  batch_size: 32
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  validation_fraction: 0.2
+  early_stopping_patience: 8
+  inner_validation_strategy: protocol_aligned
+  hidden_size: 32
+  dropout: 0.1
+  max_sequence_length: 120
+  grad_clip: 1.0
+  modifier_cap: 2.0
+  event_beta: 12.0
+  event_loss_weight: 1.0
+  terminal_loss_weight: 1.0
+  shrink_loss_weight: 0.02
+  smooth_loss_weight: 0.005
+  selection_metric: val_loader_loss
+  mean_anchor_loss_weight: 0.0
+  stage_anchor_multipliers: [3.0, 3.0, 2.0, 1.0, 1.25]
+  stage_terminal_weights: [1.0, 1.0, 2.0, 1.0, 1.25]
+  stage_shrink_multipliers: [4.0, 4.0, 2.0, 1.0, 1.0]
+
+m1_dvr_con:
+  epochs: 80
+  batch_size: 32
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  validation_fraction: 0.2
+  early_stopping_patience: 8
+  inner_validation_strategy: protocol_aligned
+  hidden_size: 32
+  dropout: 0.1
+  max_sequence_length: 120
+  grad_clip: 1.0
+  modifier_cap: 2.0
+  event_beta: 12.0
+  event_loss_weight: 1.0
+  terminal_loss_weight: 1.0
+  shrink_loss_weight: 0.02
+  smooth_loss_weight: 0.005
+  selection_metric: val_loader_loss
+  mean_anchor_loss_weight: 0.0
+  stage_anchor_multipliers: [3.0, 3.0, 2.0, 1.0, 1.25]
+  stage_terminal_weights: [1.0, 1.0, 2.0, 1.0, 1.25]
+  stage_shrink_multipliers: [4.0, 4.0, 2.0, 1.0, 1.0]
+  background_gate_prior: [1.0, 0.75, 0.50, 0.20, 0.10]
+  gate_prior_weight: 0.05
+  gate_monotonic_weight: 0.05

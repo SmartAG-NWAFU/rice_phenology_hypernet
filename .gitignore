@@ -1,0 +1,38 @@
+.DS_Store
+.pytest_cache/
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Private inputs and generated data products.
+data/raw/*
+data/boundary/*
+data/processed/*
+data/artifacts/*
+!data/raw/.gitkeep
+!data/boundary/.gitkeep
+!data/processed/.gitkeep
+!data/artifacts/.gitkeep
+!data/artifacts/features/
+!data/artifacts/features/.gitkeep
+!data/README.md
+
+# Generated experiment artifacts.
+artifacts/*
+!artifacts/.gitkeep
+!artifacts/README.md
+!artifacts/features/
+!artifacts/features/.gitkeep
+!artifacts/models/
+!artifacts/models/.gitkeep
+!artifacts/eval/
+!artifacts/eval/.gitkeep
+!artifacts/figures/
+!artifacts/figures/.gitkeep
+!artifacts/tables/
+!artifacts/tables/.gitkeep
+
+# Local logs and scratch outputs.
+logs/
+tmp/

@@ -1,0 +1,6 @@
+dpi: 300
+map_extent: [95, 125, 16, 45]
+style:
+  primary: "#2a9d8f"
+  secondary: "#e76f51"
+  accent: "#264653"
