@@ -1,7 +1,0 @@
-comparison_models: [m0_t, m0_dvr, m1_v2_dvr, m1_dvr_con]
-
-latest_model:
-  model: m1_dvr_con
-  model_label: CDRC
-  seeds: [61]
-  model_options: {}
