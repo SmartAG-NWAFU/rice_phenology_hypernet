@@ -1,8 +1,6 @@
 # rice_phenology_hypernet
 
-This public version contains the scripts needed to reproduce the paper-facing
 workflow:
-
 - historical station weather and phenology preprocessing
 - threshold inversion for the process-based baseline
 - DVR experiments for sample, site, and year extrapolation protocols
