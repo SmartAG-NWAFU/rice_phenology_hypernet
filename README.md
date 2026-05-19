@@ -1,9 +1,5 @@
 # rice_phenology_hypernet
 
-Public reproducibility code for the rice phenology study described in
-`main.pdf`. The repository is intended to be hosted at
-<https://github.com/SmartAG-NWAFU/rice_phenology_hypernet>.
-
 This public version contains the scripts needed to reproduce the paper-facing
 workflow:
 
@@ -14,11 +10,7 @@ workflow:
 - modifier interpretability analysis
 - regional plausibility-check projection and reviving-offset sensitivity
 - manuscript figure and table builders
-
-Raw data, processed data, trained weights, evaluation outputs, generated
-figures, generated tables, manuscript files, presentation assets, caches, and
-local environment files are not included.
-
+- 
 ## Repository Layout
 
 ```text
