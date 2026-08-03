@@ -18,8 +18,8 @@ Primary files:
 
 - `src/rice_phenology_hypernet/models/m1_v2_dvr.py`
 - `src/rice_phenology_hypernet/models/m1_dvr_con.py`
-- the directly affected configuration factories and constrained-loss call sites
-  in `src/rice_phenology_hypernet/experiments/runner_dvr.py`
+- the two constrained-loss call sites in
+  `src/rice_phenology_hypernet/experiments/runner_dvr.py`
 
 Out of scope:
 
@@ -55,6 +55,8 @@ Both model constructors will require a configuration object. They will no
 longer accept `None` or instantiate a default configuration internally. The
 existing runner factories remain the visible provenance link: they read the
 project experiment configuration and construct the model configuration objects.
+Their bodies already pass every required model field, so no factory change is
+expected.
 
 ## Loss Configuration
 
@@ -72,6 +74,15 @@ through `config.<field>` references. `stage_index` remains a separate argument
 because it is batch data rather than a hyperparameter. The loss equations and
 statistics remain unchanged.
 
+Following the user's explicit statement that `eps` also comes from the actual
+experiment configuration, the supplementary loss code will read the exact field
+`config.eps`, corresponding to `experiment.m1_dvr_con.eps` in the runtime
+configuration. The deleted public configuration loader visible in `HEAD`
+predates/omits this field, and no public YAML files are present. Restoring or
+updating those deleted files remains out of scope; the symbolic field access is
+intentional in this explicitly reading-only code and will be checked only for
+structural consistency.
+
 The two constrained-loss call sites in `runner_dvr.py` will pass the existing
 experiment configuration object once instead of expanding it into individual
 weight arguments.
@@ -80,6 +91,12 @@ weight arguments.
 re-export of the currently deleted common `dvr_loss.py` helper will be removed;
 the experiment runner remains responsible for applying configuration-derived
 loss settings.
+
+The gate-prior vector will also be removed from `m1_dvr_con.py`'s module
+docstring. The inverse-sigmoid initialization currently contains a separate
+hard-coded `1e-6`; this is an implementation-level numerical safeguard rather
+than a tunable hyperparameter and will be expressed without a concrete value as
+`torch.finfo(prior.dtype).eps`.
 
 ## Reading Clarity
 
@@ -96,11 +113,22 @@ incomplete working tree, verification will be structural:
 
 - scan both model scripts for forbidden numeric defaults attached to
   configuration-owned fields;
+- assert that both model constructors require a configuration object and do not
+  instantiate default configurations;
+- assert that the two constrained-loss calls use `config=cfg`, the legacy
+  scalar loss kwargs are absent from those call hunks, and the stale
+  `compute_dvr_loss` import/re-export is absent from `m1_v2_dvr.py`;
 - inspect the focused diffs for model/loss equation changes;
 - parse all existing Python files with `ast.parse`;
 - run `git diff --check` where pre-existing whitespace permits; and
 - compare Git status before and after to preserve unrelated deletions and the
   user's large pre-existing `runner_dvr.py` changes.
+
+Immediately before implementation, create a temporary byte-for-byte snapshot
+and checksum of the already-modified `runner_dvr.py`. After editing, compare the
+current file with that snapshot. The isolated delta may contain only the two
+named `compute_m1_dvr_con_loss` call-site hunks; any other runner delta is a
+verification failure.
 
 No full execution or pytest claim will be made while the configuration loader,
 common loss module, and tests remain deleted.
