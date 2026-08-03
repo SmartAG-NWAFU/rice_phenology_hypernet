@@ -10,17 +10,17 @@ reproduction instructions.
 ## Placement and Structure
 
 Insert four short sections immediately after the repository title and before
-the existing workflow list:
+the existing workflow list, using these exact headings:
 
-1. `Background`
-2. `Objectives`
-3. `Methodological Approach`
-4. `Significance`
+1. `## Background`
+2. `## Objectives`
+3. `## Methodological Approach`
+4. `## Significance`
 
 Keep each section to one compact paragraph. Retain the existing technical
 workflow, installation, input, command, and testing documentation. Convert the
-current lowercase `workflow` label into a Markdown heading and remove its empty
-trailing list item.
+current lowercase `workflow` label to the exact heading `## Workflow` and
+remove its empty trailing list item.
 
 ## Content
 
@@ -32,7 +32,7 @@ The introduction will:
   development rate (DVR) before accumulated development and threshold crossing;
 - summarize the temperature and photothermal process baselines, learned daily
   DVR modifiers, shared accumulated-development rules, sequential rollout, and
-  sample/site/year extrapolation protocols;
+  sample-level random-split evaluation and site/year extrapolation protocols;
 - describe the regional grid workflow as a plausibility check rather than an
   independent validation exercise; and
 - explain the value of integrating machine learning at a process-relevant entry
@@ -50,6 +50,8 @@ and shared DVR mechanism.
 
 After editing `README.md`:
 
+- compare `git status --short` before and after the edit so that the existing
+  unrelated dirty-worktree changes remain distinguishable;
 - inspect the focused diff for `README.md`;
 - run `git diff --check -- README.md`; and
 - confirm that no unrelated working-tree changes were modified.
