@@ -26,6 +26,15 @@ changes in `README.md`, `runner_dvr.py`, `m0.py`, `m1_v2_dvr.py`, and
 `m1_dvr_con.py` must be preserved unless this specification explicitly
 replaces the affected content.
 
+Before implementation, write a persistent audit manifest under
+`docs/superpowers/audits/`. For every tracked path, record the HEAD blob ID,
+index blob ID and status, worktree SHA-256 when the path exists, and whether the
+path is absent. The manifest must also record the exact implementation
+allowlist. Source changes must remain unstaged so every pre-existing index blob
+remains unchanged. At completion, all non-allowlisted worktree hashes must
+match, every pre-existing deletion must remain absent, and the runner's changed
+hash must be identified as the approved whole-file replacement.
+
 The code is intended to communicate the scientific workflow and does not need
 to provide a complete executable release. Nevertheless, every edited Python
 file must remain syntactically valid, interfaces shown together must agree,
@@ -76,10 +85,18 @@ The runner must show these steps in order:
 3. estimate stage requirements from the current training fold only;
 4. construct one of the four paper models;
 5. fit a learned daily-DVR modifier when the selected model is learned;
-6. apply the corrected daily DVR before accumulation;
-7. identify stage completion by threshold crossing;
-8. roll predicted stages forward sequentially; and
-9. return prediction and evaluation records.
+6. calculate the process-derived daily base DVR for the active stage;
+7. apply the learned positive modifier to that daily DVR before accumulation;
+8. accumulate the corrected DVR and identify the first threshold crossing;
+9. advance the predicted completion date to the next stage's start state and
+   repeat the same daily sequence; and
+10. return prediction and evaluation records.
+
+The runner, not one opaque backend method, must own steps 6-9. The estimated
+training-fold requirement object must be passed unchanged to model fitting and
+every stage rollout for all four models. A learned backend may produce trained
+models or daily modifier sequences, but it may not perform hidden accumulation,
+threshold crossing, or stage advancement.
 
 ### Public types and interfaces
 
@@ -88,18 +105,26 @@ data, split, CLI, or configuration modules. At minimum, the runner should
 define:
 
 - the exact `PAPER_MODEL_NAMES` tuple;
-- an experiment specification containing task, model name, and required seed;
+- an experiment specification containing task, model name, and the sole
+  required seed value;
 - a configuration protocol exposing the two learned-model configuration
   sections without concrete values;
 - a workflow-backend protocol for split construction, training-fold
-  requirement estimation, learned-model fitting, sequential rollout, and
-  scoring; and
+  requirement estimation, learned-model fitting, stage-input construction,
+  process base-DVR calculation, learned modifier calculation, and scoring; and
 - a compact experiment result containing predictions, metrics, and audit
   metadata.
 
-The public experiment function must require the configuration, backend, and
-seed explicitly. It must validate the four-model name set and preserve the
+The public entry point must be
+`run_dvr_experiment(spec, config, backend)`. It must not accept a second seed
+argument. It must validate the four-model name set and preserve the
 training-fold-only requirement-estimation boundary.
+
+Define a pure runner-owned threshold-crossing function whose inputs include the
+base-DVR sequence, optional learned modifier sequence, valid-day mask, stage
+requirement, and stage start state. It must multiply before cumulative summation
+and return the first crossing date plus the next-stage start state. Sequential
+rollout must call this function once per stage in order.
 
 ### Model construction
 
@@ -112,6 +137,21 @@ training-fold-only requirement-estimation boundary.
 
 The runner may retain structural input/state dimensions. It must not copy any
 learned-model or loss value.
+
+### Shared DVR core
+
+Add `src/rice_phenology_hypernet/experiments/dvr_core.py` for definitions used
+by both the simplified runner and regional projection:
+
+- `DVR_STAGE_NAMES`;
+- `PHOTO_SENSITIVE_STAGES`;
+- `DEFAULT_WEATHER_FEATURES`;
+- the exact four-name `PAPER_MODEL_NAMES` tuple; and
+- small stage-input/result dataclasses used by runner-owned rollout.
+
+This module contains scientific structure, names, and tensor/data contracts;
+it must not contain learned-model values, loss weights, experiment seeds, or
+run identifiers.
 
 ### Removed responsibilities
 
@@ -135,16 +175,23 @@ module unchanged.
 
 The module must:
 
-- define a protocol containing the common DVR loss settings with no defaults;
+- define `DvrLossConfig` containing, without defaults,
+  `event_loss_weight`, `terminal_loss_weight`, `shrink_loss_weight`,
+  `smooth_loss_weight`, `mean_anchor_loss_weight`,
+  `stage_anchor_multipliers`, `stage_terminal_weights`,
+  `stage_shrink_multipliers`, and `eps`;
 - implement the common event, terminal, shrinkage, smoothness, and optional
-  stage-aware terms;
+  mean-anchor/stage-aware terms;
 - accept one required configuration object rather than a long set of scalar
   hyperparameters;
 - allow only `stage_index` to retain a runtime `None` default; and
 - expose no concrete learned-model, stage-weight, or epsilon values.
 
 `m1_dvr_con.py` must use this shared objective and extend it with gate-prior
-and gate-monotonic regularization from its required configuration object.
+and gate-monotonic regularization. Its `ConstrainedDvrLossConfig` must extend
+the common protocol with required `gate_prior_weight` and
+`gate_monotonic_weight` fields. The required model configuration continues to
+own `background_gate_prior` without a default.
 `m1_v2_dvr.py` remains a model-definition module and does not re-export the
 objective.
 
@@ -153,9 +200,19 @@ objective.
 ### Data package
 
 Remove lazy exports for deleted dataset classes from `data/__init__.py`.
-Refactor `data/io.py` so raw input paths are explicit required inputs or come
-from a caller-supplied path object; do not import the deleted global project
-configuration loader. Export only existing, internally consistent helpers.
+Add a required `RawDataPaths` dataclass with `weather` and `phenology` paths.
+Use the existing `PreparedDataPaths` output contract. The exact interfaces are:
+
+- `load_raw_weather(path: Path)`;
+- `load_raw_phenology(path: Path)`;
+- `prepare_data_assets(raw_paths: RawDataPaths, prepared_paths: PreparedDataPaths)`;
+  and
+- `load_clean_data(prepared_paths: PreparedDataPaths)`.
+
+`load_clean_data` must raise `FileNotFoundError` when prepared weather or
+phenology data are absent; it must not trigger implicit preparation. Remove the
+deleted global project-configuration import and export only these existing,
+internally consistent helpers.
 
 ### Experiment package
 
@@ -176,13 +233,23 @@ and operational controls. Remove concrete deployment run identifiers and seed
 defaults from public projection interfaces; require them explicitly wherever
 they select an experiment artifact.
 
+Replace imports from deleted `data.dataset_dvr` with the constants and
+dataclasses in `experiments/dvr_core.py`. Remove imports of deployment artifact
+classes/functions from the old runner. Define a `RegionalModelProvider`
+protocol that receives a required `RegionalProjectionSpec` containing the
+deployment run identifier, seed, and period, and returns prepared prediction
+models for the exact four paper model names. Regional projection may retain
+chunking and device controls, but artifact selection must flow only through the
+required specification/provider pair.
+
 ### Regional analysis
 
 Do not advertise or export deleted general figure-builder infrastructure.
-Keep the regional analysis algorithms and their English documentation. If
-figure-building code cannot be separated safely from the deleted builder, the
-analysis interface should focus on climatology and metrics rather than claim a
-currently available general figure workflow.
+Remove the deleted figure-builder import, figure-result dataclass,
+`build_regional_grid_figures`, figure-generation helpers, `build_figures`
+control, and figure paths from analysis results/metadata. Keep the regional
+climatology and metrics algorithms with English documentation. Replace
+`DEPLOYMENT_MODEL_NAMES` with `PAPER_MODEL_NAMES` from `dvr_core.py`.
 
 ### Runtime and settings
 
@@ -194,20 +261,28 @@ parameter disclosures.
 
 Scan every existing Markdown, Python, shell, TOML, YAML, and text file for Han
 characters. Translate or generalize the two historical Chinese examples in
-`findings.md`. Do not translate identifiers, column names, file names, or data
-values unless they are natural-language documentation.
+`findings.md`. The current repository has no required Han-bearing identifier,
+column name, filename, or data value, so no allowlist applies: the final scan
+must return zero matches.
 
 All new source comments, docstrings, specification text, and README prose must
 be English.
 
 ## README Design
 
-Preserve and lightly edit the existing:
+Retain the scientific topics, but revise the existing prose rather than
+preserving its repository claims:
 
 - Background;
 - Objectives;
 - Methodological Approach; and
 - Significance.
+
+In particular, replace "public supplementary code" with neutral wording;
+remove claims that the current repository includes modifier diagnostics,
+interpretability analysis, reviving-offset sensitivity, or general
+figure/table builders; and narrow "supports reproducible analysis" to a claim
+about transparent method structure rather than executable reproduction.
 
 Replace the remaining README with sections derived from the final filesystem:
 
@@ -239,32 +314,48 @@ Remove:
 - fixed seeds, deployment run identifiers, and concrete learned parameters;
   and
 - any statement that labels the repository as supplementary reading code.
+- all uses of "supplementary" as a repository label;
+- unavailable interpretability, diagnostic, sensitivity, general figure/table
+  builder, or full reproducibility claims.
 
 ## Verification Contract
 
 The implementation is complete only when all of the following checks pass:
 
-1. A repository-wide Han-character scan returns no matches in existing text
-   and source files.
+1. A repository-wide Han-character scan returns no matches in any existing
+   Markdown, Python, shell, TOML, YAML, or text file; no allowlist is permitted.
 2. Every existing Python file under `scripts/` and `src/` parses with
    `ast.parse`.
 3. The simplified runner contains exactly the four paper model identifiers and
    no exploratory-model imports, branches, or string literals.
-4. The runner imports only existing local modules.
-5. Learned-model and objective dataclasses/protocols contain no
-   configuration-owned concrete defaults.
-6. Public experiment-selection interfaces contain no fixed seed or deployment
-   run identifier.
-7. README contains no installation, CLI, or pytest command and no reference to
+4. A repository-wide absolute-and-relative local-import audit reports no import
+   of a missing `rice_phenology_hypernet` module. Regional modules are included
+   in this check.
+5. A recording backend run over a synthetic fold proves this event order:
+   split, estimate requirements from training records, fit with the identical
+   requirement object, calculate stage inputs/base DVR, apply modifier before
+   accumulation, cross threshold, advance stage, score. The same requirement
+   object must reach every stage rollout.
+6. Learned-model/objective fields, function signatures, module constants, and
+   documentation contain no configuration-owned concrete default. The check
+   must cover all common and constrained loss fields enumerated above.
+7. `ExperimentSpec.seed` is the only seed source in the simplified runner, and
+   public regional artifact selection contains no fixed seed or deployment run
+   identifier.
+8. README contains no installation, CLI, or pytest command and no reference to
    missing configuration, test, builder, diagnostic, or sensitivity paths.
-8. README's repository tree entries resolve to paths that exist after the
+   It also contains no `supplementary` repository label, unavailable capability
+   claim, or executable-reproducibility claim.
+9. README's repository tree entries resolve to paths that exist after the
    edits.
-9. Focused `git diff --check` succeeds for files edited by this task, excluding
+10. Focused `git diff --check` succeeds for files edited by this task, excluding
    previously documented runner whitespace that disappears with the approved
    replacement.
-10. Final Git status compared with
-    `/tmp/rice-public-status.before-project-audit.Ob9Ymu` shows only approved
-    source/documentation changes and preserves all pre-existing deletions.
+11. The persistent pre-edit audit manifest proves: every non-allowlisted
+    worktree hash is unchanged; every pre-existing index blob/status is
+    unchanged; every pre-existing deletion remains absent; and only allowlisted
+    paths have new worktree hashes. The runner is explicitly recorded as the
+    approved whole-file replacement.
 
 Pytest, package importability, training, and end-to-end execution must not be
 claimed unless the missing runtime dependencies and tests are independently
