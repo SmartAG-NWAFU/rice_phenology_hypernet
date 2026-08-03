@@ -1,3 +1,8 @@
+"""Public data-loading and daylength interfaces."""
+
+from rice_phenology_hypernet.types import PreparedDataPaths, RawDataPaths
+
+from .daylength import DayLengthCalculator
 from .io import (
     PHENOLOGY_STAGE_COLUMNS,
     load_clean_data,
@@ -6,27 +11,11 @@ from .io import (
     prepare_data_assets,
 )
 
-
-def __getattr__(name: str):
-    if name == "RiceSampleDataset":
-        from .dataset import RiceSampleDataset
-
-        return RiceSampleDataset
-    if name == "RiceDvrStageDataset":
-        from .dataset_dvr import RiceDvrStageDataset
-
-        return RiceDvrStageDataset
-    if name == "RiceDvrSeasonDataset":
-        from .dataset_dvr import RiceDvrSeasonDataset
-
-        return RiceDvrSeasonDataset
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
-
 __all__ = [
+    "DayLengthCalculator",
     "PHENOLOGY_STAGE_COLUMNS",
-    "RiceDvrSeasonDataset",
-    "RiceDvrStageDataset",
-    "RiceSampleDataset",
+    "PreparedDataPaths",
+    "RawDataPaths",
     "load_clean_data",
     "load_raw_phenology",
     "load_raw_weather",

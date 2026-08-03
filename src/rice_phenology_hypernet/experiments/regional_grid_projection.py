@@ -6,23 +6,17 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
 import torch
 
-from rice_phenology_hypernet.data.dataset_dvr import (
+from rice_phenology_hypernet.experiments.dvr_core import (
     DEFAULT_WEATHER_FEATURES,
     DVR_STAGE_NAMES,
+    PAPER_MODEL_NAMES,
     PHOTO_SENSITIVE_STAGES,
-)
-from rice_phenology_hypernet.experiments.runner_dvr import (
-    DEPLOYMENT_MODEL_NAMES,
-    MaterializedProcessModel,
-    load_dvr_deployment_artifact,
-    materialize_dvr_deployment_artifact,
-    _resolve_torch_device,
 )
 from rice_phenology_hypernet.models.physics import trapezoidal_temperature_response
 from rice_phenology_hypernet.runtime import initialize_run, update_run_metadata
@@ -104,6 +98,15 @@ class RegionalGridProjectionBatchResult:
 
 
 @dataclass(frozen=True)
+class RegionalProjectionSpec:
+    """Required artifact selection for one regional projection."""
+
+    deployment_run_id: str
+    seed: int
+    period: str
+
+
+@dataclass(frozen=True)
 class WeatherSequence:
     doy: np.ndarray
     features: np.ndarray
@@ -125,11 +128,22 @@ class PreparedDeploymentModel:
     model_name: str
     stage_requirements: dict[str, float]
     artifact_type: str
-    materialized: MaterializedProcessModel | torch.nn.Module
+    materialized: Any
 
     @property
     def is_process(self) -> bool:
         return self.artifact_type == "process"
+
+
+class RegionalModelProvider(Protocol):
+    """Prepare the four paper models selected by a regional specification."""
+
+    def prepare_models(
+        self,
+        *,
+        spec: RegionalProjectionSpec,
+        device: torch.device,
+    ) -> list[PreparedDeploymentModel]: ...
 
 
 @dataclass(frozen=True)
@@ -365,10 +379,9 @@ def _prepare_regional_grid_inputs_one(
 
 def run_regional_grid_projection(
     *,
-    deployment_run_id: str = "molde4_seed61",
+    spec: RegionalProjectionSpec,
+    model_provider: RegionalModelProvider,
     run_id: str | None = None,
-    seed: int = 61,
-    period: str = DEFAULT_REGIONAL_PERIOD,
     input_path: Path | str | None = None,
     weather_dir: Path | str | None = None,
     chunk_size: int = 2048,
@@ -377,14 +390,14 @@ def run_regional_grid_projection(
     device: str | torch.device | None = "auto",
     output_dir: Path | str | None = None,
 ) -> RegionalGridProjectionResult | RegionalGridProjectionBatchResult:
-    periods = _resolve_regional_periods(period)
+    periods = _resolve_regional_periods(spec.period)
     if output_dir is None:
         run_paths = initialize_run(run_id=run_id)
         effective_run_id = run_paths.run_id
         update_manifest = True
     else:
         run_paths = None
-        effective_run_id = run_id or "regional_grid_projection"
+        effective_run_id = run_id
         update_manifest = False
 
     if len(periods) > 1 and input_path is not None:
@@ -394,11 +407,15 @@ def run_regional_grid_projection(
     for resolved_period in periods:
         base_output_dir = output_dir if output_dir is not None else run_paths.eval_dir / REGIONAL_PROJECTION_SUBDIR  # type: ignore[union-attr]
         target_dir = _period_output_dir(base_output_dir, resolved_period)
-        result = _run_regional_grid_projection_one(
-            deployment_run_id=deployment_run_id,
-            run_id=effective_run_id,
-            seed=seed,
+        period_spec = RegionalProjectionSpec(
+            deployment_run_id=spec.deployment_run_id,
+            seed=spec.seed,
             period=resolved_period,
+        )
+        result = _run_regional_grid_projection_one(
+            spec=period_spec,
+            model_provider=model_provider,
+            run_id=effective_run_id,
             input_path=input_path,
             weather_dir=weather_dir,
             chunk_size=chunk_size,
@@ -414,8 +431,8 @@ def run_regional_grid_projection(
         update_run_metadata(
             run_paths.run_id,
             regional_grid_projection={
-                "deployment_run_id": deployment_run_id,
-                "seed": int(seed),
+                "deployment_run_id": spec.deployment_run_id,
+                "seed": int(spec.seed),
                 "periods": [result.period for result in results],
                 "output_dir": _display_path(run_paths.eval_dir / REGIONAL_PROJECTION_SUBDIR),
                 "period_outputs": {
@@ -438,10 +455,9 @@ def run_regional_grid_projection(
 
 def _run_regional_grid_projection_one(
     *,
-    deployment_run_id: str,
-    run_id: str,
-    seed: int,
-    period: str,
+    spec: RegionalProjectionSpec,
+    model_provider: RegionalModelProvider,
+    run_id: str | None,
     input_path: Path | str | None,
     weather_dir: Path | str | None,
     chunk_size: int,
@@ -451,7 +467,7 @@ def _run_regional_grid_projection_one(
     output_dir: Path,
     update_manifest: bool,
 ) -> RegionalGridProjectionResult:
-    period = _validate_regional_period(period)
+    period = _validate_regional_period(spec.period)
     target_dir = Path(output_dir)
     target_dir.mkdir(parents=True, exist_ok=True)
     inputs_path = Path(input_path) if input_path is not None else REGIONAL_GRID_FEATURE_DIR / period / POINT_YEAR_INPUTS_FILENAME
@@ -466,26 +482,29 @@ def _run_regional_grid_projection_one(
     chunk_step = _resolve_chunk_size(chunk_size)
     threads = _resolve_threads_per_worker(threads_per_worker)
     torch_device = _resolve_torch_device(device)
+    prepared_models = _prepare_regional_models(
+        model_provider,
+        spec=spec,
+        device=torch_device,
+    )
 
     weather_root = Path(weather_dir) if weather_dir is not None else REGIONAL_WEATHER_DIR
     shard_paths = tuple(sorted(weather_root.glob("regional_weather_daily_clean_shard_*.parquet")))
     if not shard_paths:
         raise FileNotFoundError(f"No regional weather shard files found in {weather_root}")
 
-    model_order = _deployment_model_order(deployment_run_id)
+    model_order = [model.model_name for model in prepared_models]
     tasks = _build_projection_tasks(inputs, shard_paths)
     resolved_num_workers = _resolve_num_workers(num_workers=num_workers, task_count=len(tasks))
     wall_clock_start = time.perf_counter()
     task_frames = _execute_projection_tasks(
         tasks=tasks,
         inputs_path=inputs_path,
-        deployment_run_id=deployment_run_id,
-        seed=seed,
+        prepared_models=prepared_models,
         period=period,
         chunk_size=chunk_step,
         num_workers=resolved_num_workers,
         threads_per_worker=threads,
-        device=torch_device,
     )
     wall_clock_seconds = float(time.perf_counter() - wall_clock_start)
     yearly_predictions = (
@@ -500,9 +519,9 @@ def _run_regional_grid_projection_one(
     yearly_predictions.to_parquet(yearly_predictions_path, index=False)
 
     metadata = {
-        "deployment_run_id": deployment_run_id,
+        "deployment_run_id": spec.deployment_run_id,
         "run_id": run_id,
-        "seed": int(seed),
+        "seed": int(spec.seed),
         "period": period,
         "period_year_range": list(REGIONAL_PERIOD_YEAR_RANGES[period]),
         "model_order": model_order,
@@ -524,13 +543,15 @@ def _run_regional_grid_projection_one(
         "reviving_rule": _reviving_rule(reviving_offset),
         "notes": [
             "Regional simulation writes period-specific yearly predictions only.",
-            "Run analyze-regional-grid-projection to build climatology, heading/maturity metrics, and figures.",
+            "Regional climatology and heading/maturity metrics are derived in the analysis module.",
             "Remote-sensing transplanting dates are period-specific and define obs_reviving.",
         ],
     }
     _write_json(metadata_path, metadata)
 
     if update_manifest:
+        if run_id is None:
+            raise ValueError("run_id is required when updating run metadata")
         update_run_metadata(run_id, regional_grid_projection={period: metadata})
 
     return RegionalGridProjectionResult(
@@ -545,20 +566,24 @@ def _execute_projection_tasks(
     *,
     tasks: list[ProjectionTask],
     inputs_path: Path,
-    deployment_run_id: str,
-    seed: int,
+    prepared_models: list[PreparedDeploymentModel],
     period: str,
     chunk_size: int,
     num_workers: int,
     threads_per_worker: int,
-    device: str | torch.device,
 ) -> list[pd.DataFrame]:
     if not tasks:
         return []
 
     with _thread_environment_override(threads_per_worker):
         if num_workers == 1:
-            _initialize_worker_state(inputs_path, deployment_run_id, seed, period, chunk_size, threads_per_worker, device)
+            _initialize_worker_state(
+                inputs_path,
+                period,
+                chunk_size,
+                threads_per_worker,
+                prepared_models,
+            )
             try:
                 return [_run_projection_task(task) for task in tasks]
             finally:
@@ -567,19 +592,23 @@ def _execute_projection_tasks(
         with ProcessPoolExecutor(
             max_workers=num_workers,
             initializer=_initialize_worker_state,
-            initargs=(inputs_path, deployment_run_id, seed, period, chunk_size, threads_per_worker, str(device)),
+            initargs=(
+                inputs_path,
+                period,
+                chunk_size,
+                threads_per_worker,
+                prepared_models,
+            ),
         ) as executor:
             return list(executor.map(_run_projection_task, tasks))
 
 
 def _initialize_worker_state(
     inputs_path: Path | str,
-    deployment_run_id: str,
-    seed: int,
     period: str,
     chunk_size: int,
     threads_per_worker: int,
-    device: str | torch.device,
+    prepared_models: list[PreparedDeploymentModel],
 ) -> None:
     global _WORKER_STATE
     _set_torch_threading(threads_per_worker)
@@ -594,7 +623,7 @@ def _initialize_worker_state(
     _WORKER_STATE = WorkerState(
         period=_validate_regional_period(period),
         inputs_by_year=inputs_by_year,
-        models=_load_prepared_models(deployment_run_id=deployment_run_id, seed=seed, device=device),
+        models=prepared_models,
         chunk_size=int(chunk_size),
     )
 
@@ -759,7 +788,9 @@ def _build_stage_batch(
     base_dvr_seq = np.zeros((len(point_ids), max_len), dtype=np.float32)
     mask = np.zeros((len(point_ids), max_len), dtype=bool)
     stage_state = np.zeros((len(point_ids), 2), dtype=np.float32) if needs_stage_state else None
-    requirement = max(float(stage_requirement), 1e-6)
+    requirement = float(stage_requirement)
+    if not np.isfinite(requirement) or requirement <= 0:
+        raise ValueError("Regional stage requirements must be finite and positive")
 
     for index, slice_info in enumerate(slices):
         if slice_info is None:
@@ -803,7 +834,7 @@ def _predict_chunk_for_model(
     model_name = prepared_model.model_name
 
     for stage_index, stage_name in enumerate(PREDICTION_STAGES):
-        stage_requirement = prepared_model.stage_requirements.get(stage_name, 1.0)
+        stage_requirement = prepared_model.stage_requirements[stage_name]
         batch = _build_stage_batch(
             point_ids=point_ids,
             weather_lookup=weather_lookup,
@@ -845,7 +876,7 @@ def _predict_duration_from_progress_numpy(base_dvr_seq: np.ndarray, mask: np.nda
 
 
 def _predict_duration_from_progress_torch(
-    model: MaterializedProcessModel | torch.nn.Module,
+    model: Any,
     *,
     batch: StageBatch,
     stage_index: int,
@@ -885,41 +916,37 @@ def _predict_duration_from_progress_torch(
     return durations.detach().cpu().numpy().astype(np.int32)
 
 
-def _load_prepared_models(
+def _prepare_regional_models(
+    model_provider: RegionalModelProvider,
     *,
-    deployment_run_id: str,
-    seed: int,
-    device: str | torch.device | None = "auto",
+    spec: RegionalProjectionSpec,
+    device: torch.device,
 ) -> list[PreparedDeploymentModel]:
-    torch_device = _resolve_torch_device(device)
-    prepared: list[PreparedDeploymentModel] = []
-    for model_name in _deployment_model_order(deployment_run_id):
-        artifact = load_dvr_deployment_artifact(deployment_run_id, model_name, seed=seed)
-        materialized = materialize_dvr_deployment_artifact(artifact)
-        if isinstance(materialized, torch.nn.Module):
-            materialized = materialized.to(torch_device)
-            materialized.eval()
-        prepared.append(
-            PreparedDeploymentModel(
-                model_name=model_name,
-                stage_requirements={stage: float(value) for stage, value in artifact.stage_requirements.items()},
-                artifact_type=str(artifact.artifact_type),
-                materialized=materialized,
-            )
+    prepared = model_provider.prepare_models(spec=spec, device=device)
+    names = [model.model_name for model in prepared]
+    if len(names) != len(set(names)):
+        raise ValueError("The regional model provider returned duplicate model names")
+    unexpected = sorted(set(names) - set(PAPER_MODEL_NAMES))
+    if unexpected:
+        raise ValueError(
+            f"The regional model provider returned unsupported models: {unexpected!r}"
         )
-    return prepared
-
-
-def _deployment_model_order(deployment_run_id: str) -> list[str]:
-    manifest_path = SETTINGS.models_dir / deployment_run_id / "deployment_manifest.json"
-    if manifest_path.exists():
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        models = payload.get("models")
-        if isinstance(models, list):
-            ordered = [str(model_name) for model_name in models if str(model_name) in DEPLOYMENT_MODEL_NAMES]
-            if ordered:
-                return ordered
-    return list(DEPLOYMENT_MODEL_NAMES)
+    missing = [name for name in PAPER_MODEL_NAMES if name not in names]
+    if missing:
+        raise ValueError(
+            f"The regional model provider did not return all paper models: {missing!r}"
+        )
+    for model in prepared:
+        missing_stages = [
+            stage for stage in DVR_STAGE_NAMES if stage not in model.stage_requirements
+        ]
+        if missing_stages:
+            raise ValueError(
+                f"Regional model {model.model_name!r} is missing stage requirements: "
+                f"{missing_stages!r}"
+            )
+    by_name = {model.model_name: model for model in prepared}
+    return [by_name[name] for name in PAPER_MODEL_NAMES]
 
 
 def _read_weather_shard_for_year(shard_path: Path, year: int, columns: tuple[str, ...]) -> pd.DataFrame:
@@ -983,6 +1010,24 @@ def _set_torch_threading(threads_per_worker: int) -> None:
         torch.set_num_interop_threads(1)
     except RuntimeError:
         pass
+
+
+def _resolve_torch_device(
+    device: str | torch.device | None,
+) -> torch.device:
+    """Resolve an operational device choice without experiment defaults."""
+
+    if isinstance(device, torch.device):
+        return device
+    requested = "auto" if device is None else str(device).lower()
+    if requested == "auto":
+        if torch.cuda.is_available():
+            return torch.device("cuda")
+        mps = getattr(torch.backends, "mps", None)
+        if mps is not None and mps.is_available():
+            return torch.device("mps")
+        return torch.device("cpu")
+    return torch.device(requested)
 
 
 def _vectorized_daylength(dates: pd.Series, latitude: np.ndarray) -> np.ndarray:
@@ -1054,6 +1099,7 @@ __all__ = [
     "DEFAULT_REGIONAL_PERIOD",
     "DEFAULT_REVIVING_OFFSET_DAYS",
     "POINT_YEAR_INPUTS_FILENAME",
+    "PreparedDeploymentModel",
     "PROJECTION_METADATA_FILENAME",
     "REGIONAL_GRID_FEATURE_DIR",
     "REGIONAL_PERIODS",
@@ -1065,6 +1111,8 @@ __all__ = [
     "RegionalGridPreparationBatchResult",
     "RegionalGridProjectionResult",
     "RegionalGridProjectionBatchResult",
+    "RegionalModelProvider",
+    "RegionalProjectionSpec",
     "YEARLY_PREDICTIONS_FILENAME",
     "make_point_id",
     "prepare_regional_grid_inputs",

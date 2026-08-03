@@ -157,12 +157,12 @@ class M0PhenologyModel:
 
 
 class M0TPhenologyModel:
-    """温度-only 基线模型（不考虑光周期效应）。
+    """Temperature-only baseline model without photoperiod effects.
 
-    与 M0PhenologyModel 的关键差异：
-    - 只使用 trapezoidal_temperature_response 计算日尺度发育贡献
-    - 所有阶段统一使用 factor = 1.0，不对 booting/heading 施加光周期缩放
-    - 阈值反演使用温度-only 的历史累积
+    Key differences from M0PhenologyModel:
+    - Uses only trapezoidal_temperature_response to calculate daily development contributions.
+    - Uses factor = 1.0 for all stages, without photoperiod scaling for booting/heading.
+    - Uses historical temperature-only accumulation for threshold inversion.
     """
 
     def __init__(self, params: M0Parameters | None = None):
@@ -176,7 +176,7 @@ class M0TPhenologyModel:
         }
 
     def _prepare_weather_t(self, weather_df: pd.DataFrame) -> pd.DataFrame:
-        """只计算 thermal，不计算 photo。"""
+        """Compute thermal without computing photo."""
         df = weather_df.copy()
         df["thermal"] = trapezoidal_temperature_response(
             df["TemAver"].to_numpy(dtype=float),
@@ -188,7 +188,7 @@ class M0TPhenologyModel:
         return df
 
     def _simulate_stage_doys_t(self, weather_df: pd.DataFrame, reviving_doy: float, thresholds: list[float]) -> list[float]:
-        """温度-only 模拟：所有阶段 factor = 1.0。"""
+        """Run a temperature-only simulation with factor = 1.0 for all stages."""
         df = self._prepare_weather_t(weather_df)
         df["doy"] = df["Date"].dt.dayofyear
         df = df[df["doy"] >= reviving_doy].copy()
@@ -197,7 +197,7 @@ class M0TPhenologyModel:
         acc = 0.0
         current_stage = 0
         for _, row in df.iterrows():
-            # 温度-only：所有阶段统一使用 factor = 1.0
+            # Temperature-only: use factor = 1.0 for all stages.
             acc += row["thermal"]
             if acc >= sum(thresholds[: current_stage + 1]):
                 predictions.append(float(row["doy"]))
@@ -209,7 +209,7 @@ class M0TPhenologyModel:
         return predictions
 
     def collect_threshold_samples_t(self, weather_df: pd.DataFrame, phenology_df: pd.DataFrame) -> pd.DataFrame:
-        """温度-only 阈值反演：历史累积只使用 thermal。"""
+        """Invert temperature-only thresholds using only historical thermal accumulation."""
         weather_index = self._build_weather_index(weather_df)
         rows = []
         for _, row in phenology_df.iterrows():
@@ -223,7 +223,7 @@ class M0TPhenologyModel:
             weather = weather[weather["Date"] >= reviving].copy()
             if weather.empty:
                 continue
-            # 温度-only：daily_dev = thermal（所有阶段统一）
+            # Temperature-only: daily_dev = thermal for all stages.
             weather["daily_dev"] = weather["thermal"]
             weather["cum_dev"] = weather["daily_dev"].cumsum()
             cum_map = weather.set_index("Date")["cum_dev"]
@@ -263,7 +263,7 @@ class M0TPhenologyModel:
         return pd.DataFrame(rows)
 
     def fit(self, weather_df: pd.DataFrame, phenology_df: pd.DataFrame) -> dict[str, float]:
-        """温度-only 阈值拟合。"""
+        """Fit temperature-only thresholds."""
         threshold_df = self.collect_threshold_samples_t(weather_df, phenology_df)
         for column in THRESHOLD_COLUMNS:
             self.thresholds[column] = round(float(threshold_df[column].round(2).median()), 2)

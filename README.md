@@ -1,215 +1,137 @@
-# rice_phenology_hypernet
+# Rice Phenology Hypernet
 
-workflow:
-- historical station weather and phenology preprocessing
-- threshold inversion for the process-based baseline
-- DVR experiments for sample, site, and year extrapolation protocols
-- four paper models: `m0_t`, `m0_dvr`, `m1_v2_dvr`, and `m1_dvr_con`
-- modifier interpretability analysis
-- regional plausibility-check projection and reviving-offset sensitivity
-- manuscript figure and table builders
-- 
+## Background
+
+Accurate prediction of rice phenological stages supports crop management,
+cultivar evaluation, and assessment of climate-related production risks.
+Process-based phenology models represent development as daily weather-driven
+increments that accumulate until stage-specific requirements are reached.
+Fixed response functions and calibrated requirements, however, may not fully
+capture development across sites and years. Small daily development-rate (DVR)
+errors can consequently shift threshold-crossing dates and propagate through
+later stages.
+
+## Objectives
+
+This project examines whether machine learning can improve cross-environment
+rice phenology prediction by correcting daily DVR within the accumulated-
+development framework. It compares process baselines and hybrid models under
+sample-level, site-extrapolation, and year-extrapolation evaluation tasks while
+preserving a common definition of stage completion.
+
+## Methodological Approach
+
+The method first calculates a process-derived daily DVR from temperature and,
+where relevant, photoperiod. The hybrid models learn positive daily modifiers
+from weather sequences and stage context. Each modifier is applied before
+daily rates are accumulated. Stage completion is then determined by the first
+requirement crossing, and the following stage begins on the next day. Thus,
+learning changes the daily development input without replacing the process
+model's state update, threshold crossing, or sequential rollout.
+
+## Significance
+
+Correcting DVR at the daily process entry point provides a transparent bridge
+between process knowledge and sequence learning. The shared rollout makes it
+possible to attribute differences among models to their daily development
+formulation rather than to different post-processing rules for predicted stage
+dates. This structure also supports analysis of how prediction skill transfers
+across environmental settings.
+
+## Model Framework
+
+The retained workflow covers the four models reported in the study:
+
+- `m0_t`: a temperature-only process baseline;
+- `m0_dvr`: a photothermal process baseline;
+- `m1_v2_dvr`: a recurrent model that learns positive daily DVR modifiers;
+- `m1_dvr_con`: a constrained recurrent modifier model with stage-dependent
+  background-information gates.
+
+All four models share five sequential prediction stages: tillering, jointing,
+booting, heading, and maturity. The M0 process-response constants remain part
+of the scientific model definition. Learned-model architecture settings,
+regularization settings, loss weights, seeds, and artifact identifiers are
+supplied by external experiment configuration rather than duplicated as
+public defaults.
+
+## Workflow
+
+The core experiment structure is:
+
+1. split records according to the selected evaluation task;
+2. estimate stage requirements from training records only;
+3. fit the selected learned model when applicable;
+4. construct daily inputs for the active stage;
+5. calculate the process-derived base DVR and optional learned modifier;
+6. correct and accumulate daily DVR until the stage requirement is crossed;
+7. advance sequentially through all five stages; and
+8. summarize stage predictions with MAE, RMSE, bias, and R-squared metrics.
+
+The experiment runner owns correction, accumulation, threshold crossing, and
+stage advancement. Project-specific splitting, feature construction, fitting,
+and scoring are expressed through an injected backend so that the scientific
+order remains explicit.
+
 ## Repository Layout
 
 ```text
-configs/                         YAML configuration files
-scripts/china_rice_calendar/      regional rice-calendar helpers
-scripts/meteo_download/           historical weather download helpers
-src/rice_phenology_hypernet/      Python package
-tests/                            focused public regression tests
-data/                             empty input/output placeholders
-artifacts/                        empty generated-artifact placeholders
+src/rice_phenology_hypernet/      process models, hybrid models, objectives,
+                                  experiment contracts, and regional analysis
+scripts/china_rice_calendar/      regional rice-calendar preparation helpers
+scripts/meteo_download/           regional weather download and standardization
+data/                             placeholders for private data products
+artifacts/                        placeholders for generated outputs
+docs/superpowers/                 design, implementation, and audit records
 ```
 
-## Install
+## Configuration and Parameter Provenance
 
-```bash
-git clone https://github.com/SmartAG-NWAFU/rice_phenology_hypernet.git
-cd rice_phenology_hypernet
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-pip install -e .
-```
+Experiment-controlled values are represented by required configuration
+protocols and dataclasses. The learned models require configuration objects,
+and the common DVR objective requires a loss-configuration object. The runner
+passes the same training-derived requirement object through model fitting and
+every stage calculation within a fold. Regional artifact selection likewise
+requires a `RegionalProjectionSpec` and a `RegionalModelProvider`; no seed or
+deployment identifier is embedded in the public projection interface.
 
-For direct module execution without installation:
+Structural dimensions used to explain tensor interfaces remain visible in the
+model definitions. M0 thermal and photoperiod response constants also remain
+visible because they define the process model rather than an experiment run.
 
-```bash
-PYTHONPATH=src python -m rice_phenology_hypernet.cli --help
-```
+## Expected Data Interfaces
 
-## Expected Inputs
+Station weather is supplied through an explicit path and contains `SID`,
+`Date`, and `TemAver`; the retained preparation logic also recognizes `year`,
+`TemMin`, `TemMax`, `Precipitation`, and `Radiation`. Dates must be parseable,
+and numeric weather fields are normalized before site-year matching.
 
-Place private input data under `data/` before running the workflow. The default
-paths are defined in `configs/data.yaml`.
+Station phenology is supplied through a separate explicit path. Required
+record metadata include station identifier, year, latitude, longitude, and a
+reviving date. Stage dates from reviving through maturity must follow a valid
+chronological order. `RawDataPaths` identifies the two private inputs, while
+`PreparedDataPaths` identifies all prepared outputs. Loading prepared data does
+not silently trigger preprocessing.
 
-### Station Weather
+Regional projection uses point-year inputs linked to daily weather shards.
+Each point includes location, transplanting and reviving DOY, and remote-
+sensing heading and maturity references. Preparation helpers retain the
+documented regional periods and their associated year ranges.
 
-Default path: `data/raw/daily_temperature.csv`
+## Regional Analysis Scope
 
-Required columns:
+Regional projection applies the same ordered set of four paper models and
+produces yearly stage predictions. The analysis module aggregates these values
+to period-specific multi-year climatology and calculates heading and maturity
+MAE, RMSE, bias, R-squared, and sample counts against remote-sensing reference
+dates. This regional comparison is a bounded plausibility analysis; it does
+not by itself establish independent grid-cell deployment validation.
 
-```text
-SID, year, Date, TemAver, TemMin, TemMax, Precipitation, Radiation
-```
+## Repository Scope
 
-`Date` must be parseable as a date. Temperature is expected in deg C,
-precipitation in mm day-1, and radiation in MJ m-2 day-1.
-
-### Station Phenology
-
-Default path: `data/raw/obser_pheno_catalog_origin.xlsx`
-
-Required columns:
-
-```text
-station ID or SID, year, lat, lon, elevation,
-seeding date, transplanting date, reviving date, tillering date,
-jointing date, booting date, heading date, maturity date
-```
-
-The code standardizes `station ID` to `SID` and drops records without the
-minimum site-year metadata or invalid stage order.
-
-### Boundaries
-
-Default paths:
-
-```text
-data/boundary/china.json
-data/boundary/provinces.json
-```
-
-These are used only for map figures.
-
-### Regional Inputs
-
-Regional-grid workflows expect remote-sensing rice-calendar tables and
-historical regional weather products generated by `scripts/china_rice_calendar`
-and `scripts/meteo_download`. The regional preparation command writes model
-inputs under `artifacts/features/regional_grid_projection/<period>/`.
-
-## Reproducibility Workflow
-
-Run commands from the repository root.
-
-```bash
-PYTHONPATH=src python -m rice_phenology_hypernet.cli prepare-data
-PYTHONPATH=src python -m rice_phenology_hypernet.cli invert-thresholds
-```
-
-Run a single DVR experiment:
-
-```bash
-PYTHONPATH=src python -m rice_phenology_hypernet.cli run-dvr-experiment \
-  --task sample \
-  --model m1_dvr_con \
-  --run-id paper_repro \
-  --seed 61
-```
-
-Run the paper DVR batch:
-
-```bash
-PYTHONPATH=src python -m rice_phenology_hypernet.cli run-all-dvr-experiments \
-  --run-id paper_repro \
-  --seeds 61 \
-  --device auto
-```
-
-Train deployment artifacts used by modifier and regional workflows:
-
-```bash
-PYTHONPATH=src python -m rice_phenology_hypernet.cli train-dvr-deployment-models \
-  --run-id molde4_seed61 \
-  --seed 61
-```
-
-Run diagnostics and modifier interpretability:
-
-```bash
-PYTHONPATH=src python -m rice_phenology_hypernet.cli run-dvr-diagnostic \
-  --task sample \
-  --run-id paper_repro
-
-PYTHONPATH=src python -m rice_phenology_hypernet.cli analyze-modifier-interpretability \
-  --deployment-run-id molde4_seed61 \
-  --run-id paper_repro \
-  --seed 61
-```
-
-Regional plausibility-check workflow:
-
-```bash
-PYTHONPATH=src python -m rice_phenology_hypernet.cli prepare-regional-grid-inputs \
-  --period 2003_2007
-
-PYTHONPATH=src python -m rice_phenology_hypernet.cli run-regional-grid-projection \
-  --deployment-run-id molde4_seed61 \
-  --run-id regional_grid_periods_seed61 \
-  --seed 61 \
-  --period 2003_2007
-
-PYTHONPATH=src python -m rice_phenology_hypernet.cli analyze-regional-grid-projection \
-  --run-id regional_grid_periods_seed61 \
-  --period 2003_2007
-
-PYTHONPATH=src python -m rice_phenology_hypernet.cli run-regional-reviving-offset-sensitivity \
-  --deployment-run-id molde4_seed61 \
-  --run-id regional_reviving_offset_sensitivity_seed61 \
-  --seed 61
-```
-
-Build figures and tables from an existing run:
-
-```bash
-PYTHONPATH=src python -m rice_phenology_hypernet.cli build-figures --run-id paper_repro
-PYTHONPATH=src python -m rice_phenology_hypernet.cli build-tables --run-id paper_repro
-```
-
-## Public CLI Surface
-
-```text
-prepare-data
-invert-thresholds
-run-dvr-experiment
-run-all-dvr-experiments
-train-dvr-deployment-models
-run-dvr-diagnostic
-analyze-modifier-interpretability
-prepare-regional-grid-inputs
-run-regional-grid-projection
-analyze-regional-grid-projection
-run-regional-reviving-offset-sensitivity
-build-regional-grid-figures
-build-figures
-build-tables
-```
-
-## What Is Not Included
-
-The public repository intentionally excludes:
-
-- raw and processed study data
-- trained model weights
-- generated evaluation outputs, figures, and tables
-- manuscript PDFs, LaTeX sources, and presentation assets
-- private/local cache files and virtual environments
-- climate-scenario projection workflows outside the current paper scope
-- exploratory model variants and feature-selection/driver-analysis utilities
-- seed-bias ranking and unrelated diagnostic experiments
-
-## Tests
-
-```bash
-PYTHONPATH=src pytest \
-  tests/test_config_loading.py \
-  tests/test_data_pipeline.py \
-  tests/test_models.py \
-  tests/test_metrics.py \
-  tests/test_run_outputs.py \
-  tests/test_deployment_materialization.py \
-  tests/test_modifier_interpretability.py \
-  tests/test_regional_grid_projection.py \
-  -q
-```
+The repository contains the scientific model definitions, configuration-
+derived interfaces, four-model orchestration, data contracts, regional input
+helpers, and numeric analysis logic. Private station data, experiment-specific
+configuration values, and trained artifacts are intentionally outside the
+repository. The documentation therefore focuses on method structure and data
+provenance.

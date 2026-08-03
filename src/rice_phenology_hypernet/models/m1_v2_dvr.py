@@ -5,22 +5,22 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
-from .dvr_loss import compute_dvr_loss
-
 
 @dataclass(frozen=True)
 class M1V2DvrConfig:
+    """Model settings populated from the experiment configuration."""
+
+    hidden_size: int
+    dropout: float
+    modifier_cap: float
+    event_beta: float
     input_dim: int = 5
-    hidden_size: int = 32
-    dropout: float = 0.1
-    modifier_cap: float = 2.0
-    event_beta: float = 12.0
 
 
 class M1V2DvrModel(nn.Module):
-    def __init__(self, config: M1V2DvrConfig | None = None):
+    def __init__(self, config: M1V2DvrConfig):
         super().__init__()
-        self.config = config or M1V2DvrConfig()
+        self.config = config
         self.gru = nn.GRU(
             input_size=self.config.input_dim,
             hidden_size=self.config.hidden_size,
@@ -60,4 +60,4 @@ class M1V2DvrModel(nn.Module):
         }
 
 
-__all__ = ["M1V2DvrConfig", "M1V2DvrModel", "compute_dvr_loss"]
+__all__ = ["M1V2DvrConfig", "M1V2DvrModel"]

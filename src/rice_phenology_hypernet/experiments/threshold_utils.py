@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import pandas as pd
 
-from rice_phenology_hypernet.features.engineering import THRESHOLD_COLUMNS, THRESHOLD_DECIMALS
+from rice_phenology_hypernet.models.m0 import THRESHOLD_COLUMNS
+
+
+THRESHOLD_DECIMALS = 2
 
 
 def round_threshold_value(value: float) -> float:

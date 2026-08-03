@@ -7,6 +7,14 @@ import pandas as pd
 
 
 @dataclass(frozen=True)
+class RawDataPaths:
+    """Explicit source paths for private station data."""
+
+    weather: Path
+    phenology: Path
+
+
+@dataclass(frozen=True)
 class PreparedDataPaths:
     weather: Path
     phenology: Path

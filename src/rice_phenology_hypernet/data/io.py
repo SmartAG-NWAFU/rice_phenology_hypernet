@@ -2,12 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
-from rice_phenology_hypernet.config import get_project_config
-from rice_phenology_hypernet.settings import SETTINGS
-from rice_phenology_hypernet.types import PreparedDataPaths
+from rice_phenology_hypernet.types import PreparedDataPaths, RawDataPaths
 
 
 PHENOLOGY_DATE_COLUMNS = [
@@ -60,9 +57,7 @@ def _valid_stage_sequence(row: pd.Series) -> bool:
     return True
 
 
-def load_raw_weather(path: Path | None = None) -> pd.DataFrame:
-    config = get_project_config()
-    path = path or config.data.raw_weather
+def load_raw_weather(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path)
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
     for col in ["SID", "year", "TemAver", "TemMin", "TemMax", "Precipitation", "Radiation"]:
@@ -75,9 +70,7 @@ def load_raw_weather(path: Path | None = None) -> pd.DataFrame:
     return df.sort_values(["SID", "Date"]).reset_index(drop=True)
 
 
-def load_raw_phenology(path: Path | None = None) -> pd.DataFrame:
-    config = get_project_config()
-    path = path or config.data.raw_phenology
+def load_raw_phenology(path: Path) -> pd.DataFrame:
     df = pd.read_excel(path)
     df = _standardize_phenology_columns(df)
     df = df.dropna(subset=["SID", "year", "lat", "lon", "reviving date"]).copy()
@@ -99,31 +92,43 @@ def _restrict_to_matching_sid_year(
     return weather_df.reset_index(drop=True), phenology_df.reset_index(drop=True)
 
 
-def prepare_data_assets() -> PreparedDataPaths:
-    weather = load_raw_weather()
-    phenology = load_raw_phenology()
+def prepare_data_assets(
+    raw_paths: RawDataPaths,
+    prepared_paths: PreparedDataPaths,
+) -> PreparedDataPaths:
+    """Clean raw tables and write them to explicitly supplied output paths."""
+
+    weather = load_raw_weather(raw_paths.weather)
+    phenology = load_raw_phenology(raw_paths.phenology)
     weather, phenology = _restrict_to_matching_sid_year(weather, phenology)
 
-    SETTINGS.processed_dir.mkdir(parents=True, exist_ok=True)
-    SETTINGS.features_dir.mkdir(parents=True, exist_ok=True)
-    weather_path = SETTINGS.processed_dir / "weather_clean.parquet"
-    phenology_path = SETTINGS.processed_dir / "phenology_clean.parquet"
-    modeling_path = SETTINGS.features_dir / "modeling_dataset.parquet"
-    threshold_path = SETTINGS.features_dir / "threshold_samples.parquet"
+    for path in (
+        prepared_paths.weather,
+        prepared_paths.phenology,
+        prepared_paths.modeling_dataset,
+        prepared_paths.threshold_samples,
+    ):
+        path.parent.mkdir(parents=True, exist_ok=True)
 
-    weather.to_parquet(weather_path, index=False)
-    phenology.to_parquet(phenology_path, index=False)
-    return PreparedDataPaths(
-        weather=weather_path,
-        phenology=phenology_path,
-        modeling_dataset=modeling_path,
-        threshold_samples=threshold_path,
+    weather.to_parquet(prepared_paths.weather, index=False)
+    phenology.to_parquet(prepared_paths.phenology, index=False)
+    return prepared_paths
+
+
+def load_clean_data(
+    prepared_paths: PreparedDataPaths,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Load prepared station tables without implicit preparation."""
+
+    missing = [
+        path
+        for path in (prepared_paths.weather, prepared_paths.phenology)
+        if not path.exists()
+    ]
+    if missing:
+        expected = f"{prepared_paths.weather}, {prepared_paths.phenology}"
+        raise FileNotFoundError(f"Prepared station data are missing; expected: {expected}")
+    return (
+        pd.read_parquet(prepared_paths.weather),
+        pd.read_parquet(prepared_paths.phenology),
     )
-
-
-def load_clean_data() -> tuple[pd.DataFrame, pd.DataFrame]:
-    weather_path = SETTINGS.processed_dir / "weather_clean.parquet"
-    phenology_path = SETTINGS.processed_dir / "phenology_clean.parquet"
-    if not weather_path.exists() or not phenology_path.exists():
-        prepare_data_assets()
-    return pd.read_parquet(weather_path), pd.read_parquet(phenology_path)
