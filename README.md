@@ -42,15 +42,15 @@ artifacts/                        placeholders for generated outputs
 
 ## Package Architecture
 
-| Area | Responsibility |
-|---|---|
-| `models/` | Process models, learned DVR modifiers, physical response functions, and configuration-driven objectives |
-| `experiments/` | Shared contracts, four-model orchestration, summaries, threshold utilities, and regional workflows |
-| `data/` | Explicit raw/prepared data loading and daylength calculation |
-| `evaluation/` | Stage-level and aggregated prediction metrics |
-| `types.py` | Shared path and result dataclasses |
-| `settings.py` | Repository-relative directory definitions |
-| `runtime.py` | Run directories, manifests, metadata, and output discovery |
+| Area             | Responsibility                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------------- |
+| `models/`      | Process models, learned DVR modifiers, physical response functions, and configuration-driven objectives |
+| `experiments/` | Shared contracts, four-model orchestration, summaries, threshold utilities, and regional workflows      |
+| `data/`        | Explicit raw/prepared data loading and daylength calculation                                            |
+| `evaluation/`  | Stage-level and aggregated prediction metrics                                                           |
+| `types.py`     | Shared path and result dataclasses                                                                      |
+| `settings.py`  | Repository-relative directory definitions                                                               |
+| `runtime.py`   | Run directories, manifests, metadata, and output discovery                                              |
 
 ## Core Interfaces
 
@@ -78,10 +78,10 @@ artifacts/                        placeholders for generated outputs
 
 ## Supporting Scripts
 
-| Directory | Purpose |
-|---|---|
+| Directory                        | Purpose                                                             |
+| -------------------------------- | ------------------------------------------------------------------- |
 | `scripts/china_rice_calendar/` | Download, extract, coarsen, and inspect regional rice-calendar data |
-| `scripts/meteo_download/` | Download and standardize regional gridded weather data |
+| `scripts/meteo_download/`      | Download and standardize regional gridded weather data              |
 
 These scripts prepare external inputs. Model training and experiment settings
 remain outside the helper scripts.
@@ -96,11 +96,3 @@ remain outside the helper scripts.
   projection code to one storage layout.
 - Add data adapters around the explicit path contracts instead of introducing
   hidden global paths.
-
-## Engineering Boundaries
-
-Learned-model parameters and loss settings are supplied through configuration
-objects. The runner owns only the common orchestration and stage rollout;
-project-specific data preparation, fitting, and scoring belong to the backend.
-Private data, trained artifacts, and experiment-specific values are not stored
-in the source modules.
