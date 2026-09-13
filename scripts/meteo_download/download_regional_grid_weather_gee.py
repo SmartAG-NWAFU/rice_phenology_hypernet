@@ -22,14 +22,13 @@ DEFAULT_POINTS_PATH = (
     DATA_DIR
     / "artifacts"
     / "features"
-    / "2003_2022"
     / "china_rice_calendar"
-    / "2003_2022"
+    / "2003_2007"
     / "middle_rice_pixels_0p05deg_median_min10_lat16_35.parquet"
 )
-DEFAULT_OUTPUT_DIR = DATA_DIR / "processed" / "regional_grid_weather_gee_era5_2003_2022"
+DEFAULT_OUTPUT_DIR = DATA_DIR / "processed" / "regional_grid_weather_gee_era5_2003_2007"
 DEFAULT_START_DATE = "2003-01-01"
-DEFAULT_END_DATE = "2022-12-31"
+DEFAULT_END_DATE = "2007-12-31"
 DEFAULT_NUM_SHARDS = 3
 DEFAULT_BATCH_SIZE = 12
 DEFAULT_MAX_WORKERS = 6
@@ -41,7 +40,6 @@ GEE_EXTRACT_VARS = [
     "temperature_2m_min",
     "temperature_2m_max",
     "total_precipitation_sum",
-    "surface_solar_radiation_downwards_sum",
 ]
 RAW_OUTPUT_COLUMNS = [*GEE_EXTRACT_VARS, "date"]
 FINAL_OUTPUT_COLUMNS = ["point_id", "lon", "lat", *RAW_OUTPUT_COLUMNS]

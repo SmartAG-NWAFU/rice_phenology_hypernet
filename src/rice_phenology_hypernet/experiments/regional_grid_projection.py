@@ -15,6 +15,7 @@ import torch
 from rice_phenology_hypernet.experiments.dvr_core import (
     DEFAULT_WEATHER_FEATURES,
     DVR_STAGE_NAMES,
+    MAX_TRANSITION_DAYS,
     PAPER_MODEL_NAMES,
     PHOTO_SENSITIVE_STAGES,
 )
@@ -30,14 +31,14 @@ REMOTE_SENSING_GRID_DIR = (
     / "features"
     / "china_rice_calendar"
 )
-REGIONAL_PERIODS = ("2003_2007")
+REGIONAL_PERIODS = ("2003_2007",)
 DEFAULT_REGIONAL_PERIOD = "2003_2007"
 DEFAULT_REVIVING_OFFSET_DAYS = 5.0
 REGIONAL_PERIOD_YEAR_RANGES = {
     "2003_2007": (2003, 2007)
 }
 REGIONAL_PROJECTION_SUBDIR = "regional_grid_projection"
-REGIONAL_WEATHER_DIR = SETTINGS.processed_dir / "regional_grid_weather_gee_era5_2003_2022_clean"
+REGIONAL_WEATHER_DIR = SETTINGS.processed_dir / "regional_grid_weather_gee_era5_2003_2007_clean"
 REGIONAL_WEATHER_SUMMARY_PATH = REGIONAL_WEATHER_DIR / "regional_weather_point_year_summary.parquet"
 REGIONAL_GRID_FEATURE_DIR = SETTINGS.data_dir / "artifacts" / "features" / REGIONAL_PROJECTION_SUBDIR
 
@@ -51,7 +52,7 @@ PROJECTION_METADATA_FILENAME = "regional_grid_projection_metadata.json"
 
 PREDICTION_STAGES = tuple(DVR_STAGE_NAMES)
 MAIN_ANALYSIS_STAGES = ("heading", "maturity")
-WEATHER_SEQUENCE_LIMIT = 180
+WEATHER_SEQUENCE_LIMIT = MAX_TRANSITION_DAYS
 WEATHER_COLUMNS = (
     "point_id",
     "lat",

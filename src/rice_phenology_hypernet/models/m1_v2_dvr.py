@@ -5,6 +5,8 @@ from dataclasses import dataclass
 import torch
 from torch import nn
 
+from rice_phenology_hypernet.experiments.dvr_core import LOG_MODIFIER_CAP
+
 
 @dataclass(frozen=True)
 class M1V2DvrConfig:
@@ -12,7 +14,6 @@ class M1V2DvrConfig:
 
     hidden_size: int
     dropout: float
-    modifier_cap: float
     event_beta: float
     input_dim: int = 5
 
@@ -44,7 +45,11 @@ class M1V2DvrModel(nn.Module):
         head_logits = torch.stack([head(encoded).squeeze(-1) for head in self.stage_heads], dim=-1)
         gather_index = stage_index.view(-1, 1, 1).expand(-1, weather_seq.shape[1], 1)
         log_modifier = head_logits.gather(2, gather_index).squeeze(-1)
-        log_modifier = torch.clamp(log_modifier, min=-self.config.modifier_cap, max=self.config.modifier_cap)
+        log_modifier = torch.clamp(
+            log_modifier,
+            min=-LOG_MODIFIER_CAP,
+            max=LOG_MODIFIER_CAP,
+        )
         modifier_seq = torch.exp(log_modifier)
         modifier_seq = torch.where(mask, modifier_seq, torch.ones_like(modifier_seq))
         dvr_star_seq = base_dvr_seq * modifier_seq * mask.float()

@@ -16,6 +16,8 @@ DEFAULT_WEATHER_FEATURES = (
     "daylength",
     "Precipitation",
 )
+LOG_MODIFIER_CAP = 2.0
+MAX_TRANSITION_DAYS = 120
 PAPER_MODEL_NAMES = ("m0_t", "m0_dvr", "m1_v2_dvr", "m1_dvr_con")
 
 
@@ -41,6 +43,8 @@ class StageRolloutResult:
 __all__ = [
     "DEFAULT_WEATHER_FEATURES",
     "DVR_STAGE_NAMES",
+    "LOG_MODIFIER_CAP",
+    "MAX_TRANSITION_DAYS",
     "PAPER_MODEL_NAMES",
     "PHOTO_SENSITIVE_STAGES",
     "StageInputs",

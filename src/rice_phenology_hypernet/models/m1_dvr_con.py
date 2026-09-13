@@ -22,6 +22,8 @@ from typing import Protocol
 import torch
 from torch import nn
 
+from rice_phenology_hypernet.experiments.dvr_core import LOG_MODIFIER_CAP
+
 from .dvr_objective import DvrLossConfig, compute_dvr_loss
 
 
@@ -38,7 +40,6 @@ class M1ConDvrConfig:
 
     hidden_size: int
     dropout: float
-    modifier_cap: float
     event_beta: float
     background_gate_prior: tuple[float, ...]
     input_dim: int = 5
@@ -154,7 +155,11 @@ class M1ConDvrModel(nn.Module):
         gather_index = stage_index.view(-1, 1, 1).expand(-1, weather_seq.shape[1], 1)
         log_modifier = head_logits.gather(2, gather_index).squeeze(-1)
         
-        log_modifier = torch.clamp(log_modifier, min=-self.config.modifier_cap, max=self.config.modifier_cap)
+        log_modifier = torch.clamp(
+            log_modifier,
+            min=-LOG_MODIFIER_CAP,
+            max=LOG_MODIFIER_CAP,
+        )
         modifier_seq = torch.exp(log_modifier)
         modifier_seq = torch.where(mask, modifier_seq, torch.ones_like(modifier_seq))
         
@@ -180,7 +185,6 @@ def compute_m1_dvr_con_loss(
     *,
     model: M1ConDvrModel,
     config: ConstrainedDvrLossConfig,
-    stage_index: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     """Compute the conditional DVR correction loss, including gate regularization.
     
@@ -195,7 +199,6 @@ def compute_m1_dvr_con_loss(
         true_duration,
         mask,
         config=config,
-        stage_index=stage_index,
     )
     
     # Gate regularization terms.

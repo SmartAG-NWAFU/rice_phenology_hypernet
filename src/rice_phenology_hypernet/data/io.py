@@ -60,7 +60,7 @@ def _valid_stage_sequence(row: pd.Series) -> bool:
 def load_raw_weather(path: Path) -> pd.DataFrame:
     df = pd.read_csv(path)
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    for col in ["SID", "year", "TemAver", "TemMin", "TemMax", "Precipitation", "Radiation"]:
+    for col in ["SID", "year", "TemAver", "TemMin", "TemMax", "Precipitation"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
     df = df.dropna(subset=["SID", "Date", "TemAver"]).copy()

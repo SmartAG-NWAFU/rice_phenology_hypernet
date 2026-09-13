@@ -6,6 +6,8 @@ from typing import Protocol
 
 import torch
 
+from rice_phenology_hypernet.experiments.dvr_core import MAX_TRANSITION_DAYS
+
 
 class DvrLossConfig(Protocol):
     """Configuration-owned settings required by the DVR objective."""
@@ -14,10 +16,6 @@ class DvrLossConfig(Protocol):
     terminal_loss_weight: float
     shrink_loss_weight: float
     smooth_loss_weight: float
-    mean_anchor_loss_weight: float
-    stage_anchor_multipliers: tuple[float, ...]
-    stage_terminal_weights: tuple[float, ...]
-    stage_shrink_multipliers: tuple[float, ...]
     eps: float
 
 
@@ -27,10 +25,19 @@ def first_crossing_day(
 ) -> torch.Tensor:
     """Return the first one-based day reaching unit progress for each sample."""
 
-    crossed = (cum_progress_seq >= 1.0) & mask
+    within_window = (
+        torch.arange(mask.shape[1], device=mask.device) < MAX_TRANSITION_DAYS
+    ).unsqueeze(0)
+    rollout_mask = mask & within_window
+    crossed = (cum_progress_seq >= 1.0) & rollout_mask
     any_crossed = crossed.any(dim=1)
     first_cross = torch.argmax(crossed.int(), dim=1) + 1
-    fallback = mask.sum(dim=1)
+    day_index = torch.arange(
+        1,
+        mask.shape[1] + 1,
+        device=mask.device,
+    ).unsqueeze(0)
+    fallback = torch.where(rollout_mask, day_index, 0).max(dim=1).values
     return torch.where(any_crossed, first_cross, fallback)
 
 
@@ -40,9 +47,8 @@ def compute_dvr_loss(
     mask: torch.Tensor,
     *,
     config: DvrLossConfig,
-    stage_index: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    """Compute the event, terminal, shrinkage, smoothness, and anchor losses."""
+    """Compute the four DRC loss terms defined in the manuscript."""
 
     batch_index = torch.arange(true_duration.shape[0], device=true_duration.device)
     duration_index = torch.clamp(true_duration.long() - 1, min=0)
@@ -65,45 +71,11 @@ def compute_dvr_loss(
     terminal_progress = cum_progress[batch_index, duration_index]
     terminal_residual = (terminal_progress - 1.0) ** 2
 
-    sample_stage_index = (
-        stage_index.long()
-        if stage_index is not None
-        else torch.zeros_like(true_duration, dtype=torch.long)
-    )
-    anchor_weights = torch.tensor(
-        config.stage_anchor_multipliers,
-        dtype=torch.float32,
-        device=true_duration.device,
-    )
-    terminal_weights = torch.tensor(
-        config.stage_terminal_weights,
-        dtype=torch.float32,
-        device=true_duration.device,
-    )
-    shrink_weights = torch.tensor(
-        config.stage_shrink_multipliers,
-        dtype=torch.float32,
-        device=true_duration.device,
-    )
-
-    anchor_weight = anchor_weights[sample_stage_index]
-    terminal_weight = terminal_weights[sample_stage_index]
-    shrink_weight = shrink_weights[sample_stage_index].unsqueeze(1)
-
     terminal_loss = torch.mean(terminal_residual)
-    weighted_terminal_loss = torch.mean(terminal_residual * terminal_weight)
 
     valid_mask = mask.float()
     shrink_denom = torch.clamp(valid_mask.sum(), min=1.0)
-    shrink_loss = (
-        torch.sum((log_modifier**2) * valid_mask * shrink_weight) / shrink_denom
-    )
-
-    mean_log_modifier = torch.sum(log_modifier * valid_mask, dim=1) / torch.clamp(
-        valid_mask.sum(dim=1),
-        min=1.0,
-    )
-    mean_anchor_loss = torch.mean((mean_log_modifier**2) * anchor_weight)
+    shrink_loss = torch.sum((log_modifier**2) * valid_mask) / shrink_denom
 
     smooth_mask = mask[:, 1:] & mask[:, :-1]
     smooth_denom = torch.clamp(smooth_mask.float().sum(), min=1.0)
@@ -114,10 +86,9 @@ def compute_dvr_loss(
 
     total_loss = (
         config.event_loss_weight * event_loss
-        + config.terminal_loss_weight * weighted_terminal_loss
+        + config.terminal_loss_weight * terminal_loss
         + config.shrink_loss_weight * shrink_loss
         + config.smooth_loss_weight * smooth_loss
-        + config.mean_anchor_loss_weight * mean_anchor_loss
     )
 
     pred_duration = first_crossing_day(cum_progress, mask)
@@ -127,10 +98,8 @@ def compute_dvr_loss(
     stats = {
         "event_loss": float(event_loss.item()),
         "terminal_loss": float(terminal_loss.item()),
-        "weighted_terminal_loss": float(weighted_terminal_loss.item()),
         "shrink_loss": float(shrink_loss.item()),
         "smooth_loss": float(smooth_loss.item()),
-        "mean_anchor_loss": float(mean_anchor_loss.item()),
         "mae_duration": float(mae_duration.item()),
     }
     return total_loss, stats

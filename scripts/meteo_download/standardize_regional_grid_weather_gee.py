@@ -16,15 +16,14 @@ import pyarrow.parquet as pq
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = PROJECT_ROOT / "data"
-DEFAULT_INPUT_DIR = DATA_DIR / "processed" / "regional_grid_weather_gee_era5_2003_2022"
-DEFAULT_OUTPUT_DIR = DATA_DIR / "processed" / "regional_grid_weather_gee_era5_2003_2022_clean"
+DEFAULT_INPUT_DIR = DATA_DIR / "processed" / "regional_grid_weather_gee_era5_2003_2007"
+DEFAULT_OUTPUT_DIR = DATA_DIR / "processed" / "regional_grid_weather_gee_era5_2003_2007_clean"
 
 RAW_TO_STANDARD_COLUMNS = {
     "temperature_2m": "TemAver",
     "temperature_2m_min": "TemMin",
     "temperature_2m_max": "TemMax",
     "total_precipitation_sum": "Precipitation",
-    "surface_solar_radiation_downwards_sum": "Radiation",
     "date": "Date",
 }
 RAW_REQUIRED_COLUMNS = ["point_id", "lon", "lat", *RAW_TO_STANDARD_COLUMNS.keys()]
@@ -38,7 +37,6 @@ DAILY_OUTPUT_COLUMNS = [
     "TemMin",
     "TemMax",
     "Precipitation",
-    "Radiation",
 ]
 POINT_YEAR_COLUMNS = [
     "point_id",
@@ -51,7 +49,6 @@ POINT_YEAR_COLUMNS = [
     "TemMax_year",
     "TemAver_year",
     "Precipitation_year",
-    "Radiation_year",
 ]
 CLIMATOLOGY_COLUMNS = [
     "point_id",
@@ -62,12 +59,10 @@ CLIMATOLOGY_COLUMNS = [
     "TemMax_climatology",
     "TemAver_climatology",
     "Precipitation_climatology",
-    "Radiation_climatology",
 ]
 
 KELVIN_OFFSET = 273.15
 PRECIPITATION_SCALE = 1000.0
-RADIATION_SCALE = 1.0 / 1_000_000.0
 
 DAILY_SCHEMA = pa.schema(
     [
@@ -80,7 +75,6 @@ DAILY_SCHEMA = pa.schema(
         ("TemMin", pa.float64()),
         ("TemMax", pa.float64()),
         ("Precipitation", pa.float64()),
-        ("Radiation", pa.float64()),
     ]
 )
 
@@ -94,10 +88,9 @@ class QCAccumulator:
         self.excluded_failed_points = 0
         self.total_rows = 0
         self.clipped_negative_precipitation_values = 0
-        self.clipped_negative_radiation_values = 0
         self.variable_ranges = {
             column: {"min": None, "max": None}
-            for column in ["TemAver", "TemMin", "TemMax", "Precipitation", "Radiation"]
+            for column in ["TemAver", "TemMin", "TemMax", "Precipitation"]
         }
         self.per_shard: dict[str, dict[str, int]] = {}
 
@@ -141,7 +134,7 @@ def convert_raw_point_frame(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, 
     converted["Date"] = pd.to_datetime(converted["Date"].astype(str), format="%Y%m%d", errors="raise")
     converted["year"] = converted["Date"].dt.year.astype("int32")
 
-    for column in ["lon", "lat", "TemAver", "TemMin", "TemMax", "Precipitation", "Radiation"]:
+    for column in ["lon", "lat", "TemAver", "TemMin", "TemMax", "Precipitation"]:
         converted[column] = pd.to_numeric(converted[column], errors="coerce")
     converted = converted.dropna(subset=["point_id", "lon", "lat", "Date", "TemAver"]).copy()
 
@@ -149,19 +142,14 @@ def convert_raw_point_frame(raw: pd.DataFrame) -> tuple[pd.DataFrame, dict[str, 
     converted["TemMin"] = converted["TemMin"] - KELVIN_OFFSET
     converted["TemMax"] = converted["TemMax"] - KELVIN_OFFSET
     converted["Precipitation"] = converted["Precipitation"] * PRECIPITATION_SCALE
-    converted["Radiation"] = converted["Radiation"] * RADIATION_SCALE
 
     clipped_precip = int((converted["Precipitation"] < 0).sum())
-    clipped_radiation = int((converted["Radiation"] < 0).sum())
     if clipped_precip > 0:
         converted["Precipitation"] = converted["Precipitation"].clip(lower=0)
-    if clipped_radiation > 0:
-        converted["Radiation"] = converted["Radiation"].clip(lower=0)
 
     converted = converted.loc[:, DAILY_OUTPUT_COLUMNS].sort_values("Date").reset_index(drop=True)
     return converted, {
         "clipped_negative_precipitation_values": clipped_precip,
-        "clipped_negative_radiation_values": clipped_radiation,
     }
 
 
@@ -188,14 +176,13 @@ def summarize_point_year(clean_df: pd.DataFrame) -> pd.DataFrame:
                 "TemMax_year": float(group["TemMax"].mean()),
                 "TemAver_year": float(group["TemAver"].mean()),
                 "Precipitation_year": float(group["Precipitation"].sum()),
-                "Radiation_year": float(group["Radiation"].sum()),
             }
         )
     return pd.DataFrame(rows, columns=POINT_YEAR_COLUMNS)
 
 
 def summarize_climatology(point_year_df: pd.DataFrame) -> pd.DataFrame:
-    """Collapse point-year summaries into 2003-2022 mean annual climatology."""
+    """Collapse point-year summaries into a mean annual climatology."""
     if point_year_df.empty:
         return pd.DataFrame(columns=CLIMATOLOGY_COLUMNS)
 
@@ -207,7 +194,6 @@ def summarize_climatology(point_year_df: pd.DataFrame) -> pd.DataFrame:
             TemMax_climatology=("TemMax_year", "mean"),
             TemAver_climatology=("TemAver_year", "mean"),
             Precipitation_climatology=("Precipitation_year", "mean"),
-            Radiation_climatology=("Radiation_year", "mean"),
         )
         .loc[:, CLIMATOLOGY_COLUMNS]
         .sort_values(["lat", "lon"], ascending=[False, True])
@@ -289,7 +275,6 @@ def main(argv: list[str] | None = None) -> int:
                 shard_rows += len(clean_df)
                 shard_points += 1
                 qc.clipped_negative_precipitation_values += point_qc["clipped_negative_precipitation_values"]
-                qc.clipped_negative_radiation_values += point_qc["clipped_negative_radiation_values"]
                 qc.update_ranges(clean_df)
                 point_year_frames.append(summarize_point_year(clean_df))
 
@@ -313,8 +298,8 @@ def main(argv: list[str] | None = None) -> int:
 
     point_year_parquet = output_dir / "regional_weather_point_year_summary.parquet"
     point_year_csv = output_dir / "regional_weather_point_year_summary.csv"
-    climatology_parquet = output_dir / "regional_weather_climatology_2003_2022.parquet"
-    climatology_csv = output_dir / "regional_weather_climatology_2003_2022.csv"
+    climatology_parquet = output_dir / "regional_weather_climatology_2003_2007.parquet"
+    climatology_csv = output_dir / "regional_weather_climatology_2003_2007.csv"
     point_year_df.to_parquet(point_year_parquet, index=False)
     point_year_df.to_csv(point_year_csv, index=False)
     climatology_df.to_parquet(climatology_parquet, index=False)
@@ -336,7 +321,6 @@ def main(argv: list[str] | None = None) -> int:
         "excluded_failed_points": qc.excluded_failed_points,
         "total_rows": qc.total_rows,
         "clipped_negative_precipitation_values": qc.clipped_negative_precipitation_values,
-        "clipped_negative_radiation_values": qc.clipped_negative_radiation_values,
         "variable_ranges": qc.variable_ranges,
         "year_coverage": year_coverage,
         "per_shard": qc.per_shard,

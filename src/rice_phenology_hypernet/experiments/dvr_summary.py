@@ -9,8 +9,8 @@ import pandas as pd
 TASK_ORDER = ["sample", "site", "year"]
 STAGE_ORDER = ["tillering", "jointing", "booting", "heading", "maturity", "all_stage"]
 MODEL_ORDER = ["m0_t", "m0_dvr", "m1_v2_dvr", "m1_dvr_con"]
-BASELINE_MODEL = "m0_dvr"
-COMPARISON_MODELS = [model_name for model_name in MODEL_ORDER if model_name != BASELINE_MODEL]
+BASELINE_MODELS = ("m0_t", "m0_dvr")
+COMPARISON_MODELS = ("m1_v2_dvr", "m1_dvr_con")
 SUMMARY_METRICS = ("mae", "rmse", "bias", "r2")
 DERIVED_METRICS = (
     "mae_improve_days",
@@ -26,7 +26,8 @@ SUMMARY_COLUMNS = [
     "stage",
     *[f"{model_name}_{metric_name}" for model_name in MODEL_ORDER for metric_name in SUMMARY_METRICS],
     *[
-        f"{model_name}_vs_{BASELINE_MODEL}_{metric_name}"
+        f"{model_name}_vs_{baseline_model}_{metric_name}"
+        for baseline_model in BASELINE_MODELS
         for model_name in COMPARISON_MODELS
         for metric_name in DERIVED_METRICS
     ],
@@ -93,20 +94,29 @@ def _safe_pct(numerator: float, denominator: float) -> float:
     return 100.0 * float(numerator) / float(denominator)
 
 
-def _build_relative_row(baseline_metrics: pd.Series, model_metrics: pd.Series, model_name: str) -> dict[str, float]:
+def _build_relative_row(
+    baseline_metrics: pd.Series,
+    model_metrics: pd.Series,
+    *,
+    baseline_model: str,
+    model_name: str,
+) -> dict[str, float]:
     baseline_values = pd.to_numeric(baseline_metrics.loc[list(SUMMARY_METRICS)], errors="coerce")
     model_values = pd.to_numeric(model_metrics.loc[list(SUMMARY_METRICS)], errors="coerce")
     if baseline_values.isna().any() or model_values.isna().any():
-        return {f"{model_name}_vs_{BASELINE_MODEL}_{metric_name}": float("nan") for metric_name in DERIVED_METRICS}
+        return {
+            f"{model_name}_vs_{baseline_model}_{metric_name}": float("nan")
+            for metric_name in DERIVED_METRICS
+        }
     mae_improve_days = float(baseline_values["mae"] - model_values["mae"])
     abs_bias_improve_days = float(abs(baseline_values["bias"]) - abs(model_values["bias"]))
     return {
-        f"{model_name}_vs_{BASELINE_MODEL}_mae_improve_days": mae_improve_days,
-        f"{model_name}_vs_{BASELINE_MODEL}_mae_improve_pct": _safe_pct(mae_improve_days, float(baseline_values["mae"])),
-        f"{model_name}_vs_{BASELINE_MODEL}_bias_shift": float(model_values["bias"] - baseline_values["bias"]),
-        f"{model_name}_vs_{BASELINE_MODEL}_abs_bias_improve_days": abs_bias_improve_days,
-        f"{model_name}_vs_{BASELINE_MODEL}_abs_bias_improve_pct": _safe_pct(abs_bias_improve_days, abs(float(baseline_values["bias"]))),
-        f"{model_name}_vs_{BASELINE_MODEL}_r2_gain": float(model_values["r2"] - baseline_values["r2"]),
+        f"{model_name}_vs_{baseline_model}_mae_improve_days": mae_improve_days,
+        f"{model_name}_vs_{baseline_model}_mae_improve_pct": _safe_pct(mae_improve_days, float(baseline_values["mae"])),
+        f"{model_name}_vs_{baseline_model}_bias_shift": float(model_values["bias"] - baseline_values["bias"]),
+        f"{model_name}_vs_{baseline_model}_abs_bias_improve_days": abs_bias_improve_days,
+        f"{model_name}_vs_{baseline_model}_abs_bias_improve_pct": _safe_pct(abs_bias_improve_days, abs(float(baseline_values["bias"]))),
+        f"{model_name}_vs_{baseline_model}_r2_gain": float(model_values["r2"] - baseline_values["r2"]),
     }
 
 
@@ -127,14 +137,22 @@ def build_dvr_relative_change_summary(
         for model_name in MODEL_ORDER:
             metric_frames.setdefault(model_name, _empty_metrics_frame(task, model_name))
         for stage in STAGE_ORDER:
-            baseline_metrics = metric_frames[BASELINE_MODEL].loc[stage]
             row: dict[str, float | str] = {"task": task, "stage": stage}
             for model_name in MODEL_ORDER:
                 model_metrics = metric_frames[model_name].loc[stage]
                 for metric_name in SUMMARY_METRICS:
                     row[f"{model_name}_{metric_name}"] = float(model_metrics[metric_name])
-            for model_name in COMPARISON_MODELS:
-                row.update(_build_relative_row(baseline_metrics, metric_frames[model_name].loc[stage], model_name))
+            for baseline_model in BASELINE_MODELS:
+                baseline_metrics = metric_frames[baseline_model].loc[stage]
+                for model_name in COMPARISON_MODELS:
+                    row.update(
+                        _build_relative_row(
+                            baseline_metrics,
+                            metric_frames[model_name].loc[stage],
+                            baseline_model=baseline_model,
+                            model_name=model_name,
+                        )
+                    )
             rows.append(row)
     output_path = eval_dir / "dvr_relative_change_summary.csv"
     pd.DataFrame(rows, columns=SUMMARY_COLUMNS).to_csv(output_path, index=False)

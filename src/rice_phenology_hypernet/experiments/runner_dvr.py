@@ -17,6 +17,7 @@ import pandas as pd
 
 from .dvr_core import (
     DVR_STAGE_NAMES,
+    MAX_TRANSITION_DAYS,
     PAPER_MODEL_NAMES,
     StageInputs,
     StageRolloutResult,
@@ -57,10 +58,6 @@ class DvrLossSettings(Protocol):
     terminal_loss_weight: float
     shrink_loss_weight: float
     smooth_loss_weight: float
-    mean_anchor_loss_weight: float
-    stage_anchor_multipliers: tuple[float, ...]
-    stage_terminal_weights: tuple[float, ...]
-    stage_shrink_multipliers: tuple[float, ...]
     eps: float
 
 
@@ -69,7 +66,6 @@ class M1V2Settings(DvrLossSettings, Protocol):
 
     hidden_size: int
     dropout: float
-    modifier_cap: float
     event_beta: float
 
 
@@ -78,7 +74,6 @@ class M1ConSettings(DvrLossSettings, Protocol):
 
     hidden_size: int
     dropout: float
-    modifier_cap: float
     event_beta: float
     background_gate_prior: tuple[float, ...]
     gate_prior_weight: float
@@ -106,6 +101,7 @@ class DvrWorkflowBackend(Protocol):
 
     def estimate_stage_requirements(
         self,
+        model_name: str,
         train_records: pd.DataFrame,
     ) -> Mapping[str, float]: ...
 
@@ -198,7 +194,6 @@ def build_paper_model(
             M1V2DvrConfig(
                 hidden_size=section.hidden_size,
                 dropout=section.dropout,
-                modifier_cap=section.modifier_cap,
                 event_beta=section.event_beta,
             )
         )
@@ -213,7 +208,6 @@ def build_paper_model(
         M1ConDvrConfig(
             hidden_size=section.hidden_size,
             dropout=section.dropout,
-            modifier_cap=section.modifier_cap,
             event_beta=section.event_beta,
             background_gate_prior=section.background_gate_prior,
         )
@@ -223,13 +217,12 @@ def build_paper_model(
 def rollout_stage(
     inputs: StageInputs,
     base_dvr: np.ndarray,
-    requirement: float,
     modifier: np.ndarray | None,
     stage_start_doy: float,
     *,
     trace: list[str] | None = None,
 ) -> StageRolloutResult:
-    """Apply correction and return the first daily threshold crossing."""
+    """Apply correction and return the first day reaching unit progress."""
 
     doy = np.asarray(inputs.doy, dtype=float)
     mask = np.asarray(inputs.mask, dtype=bool)
@@ -238,8 +231,6 @@ def rollout_stage(
         raise ValueError("Stage DOY, mask, and base DVR inputs must be one-dimensional")
     if not (doy.shape == mask.shape == base.shape):
         raise ValueError("Stage DOY, mask, and base DVR inputs must share one shape")
-    if not np.isfinite(requirement) or requirement <= 0:
-        raise ValueError("The stage requirement must be a finite positive value")
     if not np.isfinite(stage_start_doy):
         raise ValueError("The stage start DOY must be finite")
 
@@ -252,14 +243,24 @@ def rollout_stage(
 
     if trace is not None:
         trace.append("correct")
-    corrected = np.where(mask, base * effective_modifier, 0.0)
+    eligible = mask & np.isfinite(doy) & (doy >= stage_start_doy)
+    eligible_indices = np.flatnonzero(eligible)[:MAX_TRANSITION_DAYS]
+    rollout_mask = np.zeros_like(mask)
+    rollout_mask[eligible_indices] = True
+
+    corrected = np.where(rollout_mask, base * effective_modifier, 0.0)
     if trace is not None:
         trace.append("accumulate")
     cumulative = np.cumsum(corrected)
     if trace is not None:
         trace.append("cross")
-    crossings = np.flatnonzero(mask & (cumulative >= requirement))
-    completion = float(doy[crossings[0]]) if len(crossings) else float("nan")
+    crossings = np.flatnonzero(rollout_mask & (cumulative >= 1.0))
+    if len(crossings):
+        completion = float(doy[crossings[0]])
+    elif len(eligible_indices):
+        completion = float(doy[eligible_indices[-1]])
+    else:
+        completion = float("nan")
     if trace is not None:
         trace.append("advance")
     next_start = completion + 1.0 if np.isfinite(completion) else float("nan")
@@ -301,7 +302,10 @@ def run_dvr_experiment(
 
     for fold in folds:
         call_order.append("estimate")
-        requirements = backend.estimate_stage_requirements(fold.train_records)
+        requirements = backend.estimate_stage_requirements(
+            spec.model_name,
+            fold.train_records,
+        )
         missing_stages = [stage for stage in DVR_STAGE_NAMES if stage not in requirements]
         if missing_stages:
             raise ValueError(
@@ -348,11 +352,9 @@ def run_dvr_experiment(
                     inputs,
                     requirements,
                 )
-                stage_requirement = float(requirements[stage_name])
                 result = rollout_stage(
                     inputs,
                     base_dvr,
-                    stage_requirement,
                     modifier,
                     stage_start_doy,
                     trace=call_order,
@@ -375,6 +377,7 @@ def run_dvr_experiment(
         fold_audit.append(
             {
                 "fold": fold.fold,
+                "requirement_model": spec.model_name,
                 "requirement_object_id": id(requirements),
                 "requirement_source": "training_records_only",
                 "stage_trace": tuple(fold_trace),
@@ -417,7 +420,7 @@ def validate_recording_backend_contract() -> None:
             events.append("split")
             return (FoldRecords(0, records.copy(), records.copy()),)
 
-        def estimate_stage_requirements(self, train_records):
+        def estimate_stage_requirements(self, model_name, train_records):
             events.append("estimate")
             return {stage: 1.0 for stage in DVR_STAGE_NAMES}
 

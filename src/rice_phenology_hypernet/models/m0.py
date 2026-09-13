@@ -6,6 +6,10 @@ import numpy as np
 import pandas as pd
 
 from rice_phenology_hypernet.data.daylength import DayLengthCalculator
+from rice_phenology_hypernet.experiments.dvr_core import (
+    MAX_TRANSITION_DAYS,
+    PHOTO_SENSITIVE_STAGES,
+)
 from rice_phenology_hypernet.models.physics import (
     oryza2000_photo_response,
     trapezoidal_temperature_response,
@@ -20,6 +24,83 @@ THRESHOLD_COLUMNS = [
     "th_booting_heading",
     "th_heading_maturity",
 ]
+TRANSITION_START_COLUMNS = [
+    "reviving date",
+    "tillering date",
+    "jointing date",
+    "booting date",
+    "heading date",
+]
+
+
+def _inclusive_transition_sums(
+    weather: pd.DataFrame,
+    phenology: pd.Series,
+    *,
+    use_photoperiod: bool,
+) -> list[float]:
+    values: list[float] = []
+    for stage_name, start_column, end_stage in zip(
+        STAGE_NAMES,
+        TRANSITION_START_COLUMNS,
+        STAGE_NAMES,
+    ):
+        start = pd.to_datetime(phenology.get(start_column), errors="coerce")
+        end = pd.to_datetime(phenology.get(f"{end_stage} date"), errors="coerce")
+        if pd.isna(start) or pd.isna(end) or end < start:
+            values.append(float("nan"))
+            continue
+
+        interval = weather.loc[
+            (weather["Date"] >= start) & (weather["Date"] <= end)
+        ].copy()
+        expected_days = int((end.normalize() - start.normalize()).days) + 1
+        observed_dates = pd.to_datetime(interval["Date"]).dt.normalize()
+        if (
+            interval.empty
+            or len(interval) != expected_days
+            or observed_dates.nunique() != expected_days
+        ):
+            values.append(float("nan"))
+            continue
+
+        daily_development = interval["thermal"].to_numpy(dtype=float)
+        if use_photoperiod and stage_name in PHOTO_SENSITIVE_STAGES:
+            daily_development = (
+                daily_development * interval["photo"].to_numpy(dtype=float)
+            )
+        requirement = float(np.sum(daily_development))
+        values.append(requirement if requirement > 0.0 else float("nan"))
+    return values
+
+
+def _rollout_stage_signals(
+    doy: np.ndarray,
+    stage_signals: list[np.ndarray],
+    start_doy: float,
+    requirements: list[float],
+) -> list[float]:
+    predictions: list[float] = []
+    current_start = float(start_doy)
+    for signal, requirement in zip(stage_signals, requirements):
+        if not np.isfinite(requirement) or requirement <= 0.0:
+            predictions.extend([float("nan")] * (len(requirements) - len(predictions)))
+            break
+        eligible = np.flatnonzero(
+            np.isfinite(doy) & np.isfinite(signal) & (doy >= current_start)
+        )[:MAX_TRANSITION_DAYS]
+        if not len(eligible):
+            predictions.extend([float("nan")] * (len(requirements) - len(predictions)))
+            break
+
+        cumulative = np.cumsum(signal[eligible])
+        crossings = np.flatnonzero(cumulative >= requirement)
+        completion = float(
+            doy[eligible[crossings[0]]] if len(crossings) else doy[eligible[-1]]
+        )
+        predictions.append(completion)
+        current_start = completion + 1.0
+    return predictions
 
 
 @dataclass
@@ -65,22 +146,18 @@ class M0PhenologyModel:
     def _simulate_stage_doys(self, weather_df: pd.DataFrame, latitude: float, reviving_doy: float, thresholds: list[float]) -> list[float]:
         df = self._prepare_weather(weather_df, latitude)
         df["doy"] = df["Date"].dt.dayofyear
-        df = df[df["doy"] >= reviving_doy].copy()
-
-        predictions = []
-        acc = 0.0
-        current_stage = 0
-        for _, row in df.iterrows():
-            factor = 1.0 if current_stage < 2 or current_stage > 3 else row["photo"]
-            acc += row["thermal"] * factor
-            if acc >= sum(thresholds[: current_stage + 1]):
-                predictions.append(float(row["doy"]))
-                current_stage += 1
-                if current_stage == len(thresholds):
-                    break
-        while len(predictions) < len(thresholds):
-            predictions.append(np.nan)
-        return predictions
+        thermal = df["thermal"].to_numpy(dtype=float)
+        photothermal = thermal * df["photo"].to_numpy(dtype=float)
+        stage_signals = [
+            photothermal if stage_name in PHOTO_SENSITIVE_STAGES else thermal
+            for stage_name in STAGE_NAMES
+        ]
+        return _rollout_stage_signals(
+            df["doy"].to_numpy(dtype=float),
+            stage_signals,
+            reviving_doy,
+            thresholds,
+        )
 
     def collect_threshold_samples(self, weather_df: pd.DataFrame, phenology_df: pd.DataFrame) -> pd.DataFrame:
         weather_index = self._build_weather_index(weather_df)
@@ -93,37 +170,14 @@ class M0PhenologyModel:
             reviving = pd.to_datetime(row["reviving date"], errors="coerce")
             if pd.isna(reviving):
                 continue
-            weather = weather[weather["Date"] >= reviving].copy()
             if weather.empty:
                 continue
-            weather["factor"] = 1.0
-            jointing = pd.to_datetime(row.get("jointing date"), errors="coerce")
-            heading = pd.to_datetime(row.get("heading date"), errors="coerce")
-            if pd.notna(jointing) and pd.notna(heading):
-                mask = (weather["Date"] > jointing) & (weather["Date"] <= heading)
-                weather.loc[mask, "factor"] = weather.loc[mask, "photo"]
-            weather["daily_dev"] = weather["thermal"] * weather["factor"]
-            weather["cum_dev"] = weather["daily_dev"].cumsum()
-            cum_map = weather.set_index("Date")["cum_dev"]
-            stage_dates = [pd.to_datetime(row.get(f"{stage} date"), errors="coerce") for stage in STAGE_NAMES]
-            cumulative = [cum_map.get(stage_date, np.nan) if pd.notna(stage_date) else np.nan for stage_date in stage_dates]
-
-            diffs = []
-            prev = 0.0
-            valid = True
-            for value in cumulative:
-                if pd.isna(value):
-                    valid = False
-                    diffs.append(np.nan)
-                    continue
-                diff = float(value - prev)
-                if diff <= 0:
-                    valid = False
-                    diffs.append(np.nan)
-                else:
-                    diffs.append(diff)
-                    prev = float(value)
-            if not valid:
+            requirements = _inclusive_transition_sums(
+                weather,
+                row,
+                use_photoperiod=True,
+            )
+            if not np.isfinite(requirements).any():
                 continue
             rows.append(
                 {
@@ -135,7 +189,7 @@ class M0PhenologyModel:
                     "transplanting_date": pd.to_datetime(row.get("transplanting date"), errors="coerce"),
                     "reviving_date": reviving,
                     "source": "m0_inversion",
-                    **dict(zip(THRESHOLD_COLUMNS, diffs)),
+                    **dict(zip(THRESHOLD_COLUMNS, requirements)),
                 }
             )
         return pd.DataFrame(rows)
@@ -143,7 +197,7 @@ class M0PhenologyModel:
     def fit(self, weather_df: pd.DataFrame, phenology_df: pd.DataFrame) -> dict[str, float]:
         threshold_df = self.collect_threshold_samples(weather_df, phenology_df)
         for column in THRESHOLD_COLUMNS:
-            self.thresholds[column] = round(float(threshold_df[column].round(2).median()), 2)
+            self.thresholds[column] = float(threshold_df[column].median())
         return dict(self.thresholds)
 
     def predict_one(self, weather_df: pd.DataFrame, sample: pd.Series) -> list[float]:
@@ -191,22 +245,13 @@ class M0TPhenologyModel:
         """Run a temperature-only simulation with factor = 1.0 for all stages."""
         df = self._prepare_weather_t(weather_df)
         df["doy"] = df["Date"].dt.dayofyear
-        df = df[df["doy"] >= reviving_doy].copy()
-
-        predictions = []
-        acc = 0.0
-        current_stage = 0
-        for _, row in df.iterrows():
-            # Temperature-only: use factor = 1.0 for all stages.
-            acc += row["thermal"]
-            if acc >= sum(thresholds[: current_stage + 1]):
-                predictions.append(float(row["doy"]))
-                current_stage += 1
-                if current_stage == len(thresholds):
-                    break
-        while len(predictions) < len(thresholds):
-            predictions.append(np.nan)
-        return predictions
+        thermal = df["thermal"].to_numpy(dtype=float)
+        return _rollout_stage_signals(
+            df["doy"].to_numpy(dtype=float),
+            [thermal] * len(STAGE_NAMES),
+            reviving_doy,
+            thresholds,
+        )
 
     def collect_threshold_samples_t(self, weather_df: pd.DataFrame, phenology_df: pd.DataFrame) -> pd.DataFrame:
         """Invert temperature-only thresholds using only historical thermal accumulation."""
@@ -220,32 +265,14 @@ class M0TPhenologyModel:
             reviving = pd.to_datetime(row["reviving date"], errors="coerce")
             if pd.isna(reviving):
                 continue
-            weather = weather[weather["Date"] >= reviving].copy()
             if weather.empty:
                 continue
-            # Temperature-only: daily_dev = thermal for all stages.
-            weather["daily_dev"] = weather["thermal"]
-            weather["cum_dev"] = weather["daily_dev"].cumsum()
-            cum_map = weather.set_index("Date")["cum_dev"]
-            stage_dates = [pd.to_datetime(row.get(f"{stage} date"), errors="coerce") for stage in STAGE_NAMES]
-            cumulative = [cum_map.get(stage_date, np.nan) if pd.notna(stage_date) else np.nan for stage_date in stage_dates]
-
-            diffs = []
-            prev = 0.0
-            valid = True
-            for value in cumulative:
-                if pd.isna(value):
-                    valid = False
-                    diffs.append(np.nan)
-                    continue
-                diff = float(value - prev)
-                if diff <= 0:
-                    valid = False
-                    diffs.append(np.nan)
-                else:
-                    diffs.append(diff)
-                    prev = float(value)
-            if not valid:
+            requirements = _inclusive_transition_sums(
+                weather,
+                row,
+                use_photoperiod=False,
+            )
+            if not np.isfinite(requirements).any():
                 continue
             rows.append(
                 {
@@ -257,7 +284,7 @@ class M0TPhenologyModel:
                     "transplanting_date": pd.to_datetime(row.get("transplanting date"), errors="coerce"),
                     "reviving_date": reviving,
                     "source": "m0_t_inversion",
-                    **dict(zip(THRESHOLD_COLUMNS, diffs)),
+                    **dict(zip(THRESHOLD_COLUMNS, requirements)),
                 }
             )
         return pd.DataFrame(rows)
@@ -266,7 +293,7 @@ class M0TPhenologyModel:
         """Fit temperature-only thresholds."""
         threshold_df = self.collect_threshold_samples_t(weather_df, phenology_df)
         for column in THRESHOLD_COLUMNS:
-            self.thresholds[column] = round(float(threshold_df[column].round(2).median()), 2)
+            self.thresholds[column] = float(threshold_df[column].median())
         return dict(self.thresholds)
 
     def predict_one(self, weather_df: pd.DataFrame, sample: pd.Series) -> list[float]:
