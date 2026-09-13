@@ -1,19 +1,5 @@
-"""M1-DVR-CON: a physics-guided DVR modifier model with stage-decaying background-information injection.
+"""Constrained-context daily DVR correction model used for CDRC."""
 
-Core design:
-- Adds a background_gate parameter to the daily DVR correction architecture to control the
-  background-information weight for each stage.
-- Applies sigmoid activation to background_gate, with one global scalar per stage.
-- Initializes gates from a stage-dependent prior supplied by the experiment configuration.
-- Adds gate_prior_loss and gate_monotonic_loss to constrain gates toward the prior and enforce
-  a monotonic decrease.
-
-Physical interpretation:
-- Early stages (tillering and jointing): days since transplanting are the primary development
-  driver → high background-information weights.
-- Later stages (heading and maturity): accumulated temperature dominates → weather drivers are
-  sufficient, and background information may introduce a year-related shortcut.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -47,20 +33,8 @@ class M1ConDvrConfig:
 
 
 class M1ConDvrModel(nn.Module):
-    """DVR modifier model with stage-decaying background-information injection.
-    
-    Model architecture:
-    1. state_proj: Linear(2, hidden) + Tanh - projects background information into hidden space
-    2. stage_embedding: Embedding(5, hidden) - stage-type information (not subject to decay)
-    3. background_gate: Parameter([5]) - sigmoid activation controlling background-information weights
-    4. context = stage_embedding + alpha_stage * state_proj
-    5. GRU(weather + context) - temporal encoding
-    6. stage-specific heads - stage-specific correction outputs
-    
-    Note: stage_embedding is not subject to decay because it provides stage-type information
-    rather than calendar context.
-    """
-    
+    """Condition DVR correction on gated transition-start context."""
+
     def __init__(self, config: M1ConDvrConfig):
         super().__init__()
         self.config = config
@@ -111,25 +85,8 @@ class M1ConDvrModel(nn.Module):
         base_dvr_seq: torch.Tensor,
         mask: torch.Tensor,
     ) -> dict[str, torch.Tensor]:
-        """Run the forward pass with stage decay.
-        
-        Args:
-            weather_seq: [batch, seq_len, input_dim]
-            stage_state: [batch, 2] - DOY + days since transplanting
-            stage_index: [batch] - stage index (0-4)
-            base_dvr_seq: [batch, seq_len]
-            mask: [batch, seq_len]
-        
-        Returns:
-            Dictionary containing:
-            - log_modifier_seq: [batch, seq_len]
-            - modifier_seq: [batch, seq_len]
-            - dvr_star_seq: [batch, seq_len]
-            - cum_progress_seq: [batch, seq_len]
-            - completion_cdf: [batch, seq_len]
-            - all_background_gates: [5] - gate values for all stages
-            - stage_background_gate: [batch] - stage gate for each sample in the current batch
-        """
+        """Return corrected progress and context-gate diagnostics."""
+
         # Get the gate values for all stages.
         all_gates = self.get_background_gates()  # [5]
         
@@ -186,13 +143,8 @@ def compute_m1_dvr_con_loss(
     model: M1ConDvrModel,
     config: ConstrainedDvrLossConfig,
 ) -> tuple[torch.Tensor, dict[str, float]]:
-    """Compute the conditional DVR correction loss, including gate regularization.
-    
-    Additional loss terms:
-    - gate_prior_loss: constrains gates toward the prior
-    - gate_monotonic_loss: enforces monotonically decreasing gates
-      (tillering ≥ jointing ≥ ... ≥ maturity)
-    """
+    """Add gate-prior and non-increasing-gate penalties to the DRC loss."""
+
     # First compute the base DVR loss.
     base_loss, base_stats = compute_dvr_loss(
         outputs,
