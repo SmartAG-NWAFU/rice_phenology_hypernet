@@ -6,7 +6,6 @@ from dataclasses import dataclass
 
 import numpy as np
 
-
 DVR_STAGE_NAMES = ("tillering", "jointing", "booting", "heading", "maturity")
 PHOTO_SENSITIVE_STAGES = frozenset({"booting", "heading"})
 DEFAULT_WEATHER_FEATURES = (
