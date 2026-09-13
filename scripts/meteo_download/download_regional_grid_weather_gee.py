@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
-"""Download historical daily weather for regional coarse-grid points via local GEE/ERA5."""
-
+"""Download historical daily weather for regional coarse-grid points via local GEE/ERA5.""
 from __future__ import annotations
 
 import argparse
