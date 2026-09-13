@@ -263,31 +263,6 @@ python scripts/meteo_download/standardize_regional_grid_weather_gee.py \
   --output-dir data/processed/regional_grid_weather_gee_era5_2003_2007_clean
 ```
 
-<details>
-<summary>Regional projection programmatic interfaces</summary>
-
-`prepare_regional_grid_inputs(...)` joins the supported `2003_2007` middle-rice calendar product to available point-year weather and records valid and excluded locations. Its default `reviving_offset_days=5` matches the manuscript's approximation from the observed median transplanting-to-reviving interval. `run_regional_grid_projection(...)` requires a `RegionalProjectionSpec` and `RegionalModelProvider`; it writes yearly predictions plus projection metadata. `analyze_regional_grid_projection(...)` converts those predictions into a five-year climatology and heading/maturity metrics.
-
-The manuscript also reports a 2-15 day sensitivity analysis for the reviving offset. The public preparation interface accepts alternative offsets, but no dedicated sensitivity-analysis orchestrator is tracked. The current regional period registry contains `2003_2007`; other calendar periods handled by the preparation scripts are not automatically supported by the projection registry.
-
-</details>
-
-## Outputs, provenance, and repository scope
-
-| Path or object | Content | Provenance behavior |
-| --- | --- | --- |
-| `DvrExperimentBundle` | In-memory prediction and metric frames plus audit metadata | Records task, model, call order, fold id, and training-only requirement source |
-| `artifacts/eval/<run_id>/run_manifest.json` | Run identity and registered experiment or regional metadata | Created and updated by `runtime.py`; paths inside the repository are stored relatively where possible |
-| `artifacts/eval/latest.json` | Most recently initialized run id | Updated only when run initialization requests it |
-| `artifacts/eval/<run_id>/config_snapshot/` | Copies of available `configs/*.yaml` at run initialization | Empty when no configuration files are supplied locally |
-| `data/artifacts/features/` | Prepared regional point and point-year tables, exclusions, and input metadata | Built locally from calendar and weather inputs |
-| `artifacts/eval/<run_id>/regional_grid_projection/` | Yearly predictions, climatology, heading/maturity metrics, and JSON metadata | Produced by regional projection and analysis interfaces |
-| `artifacts/models/`, `artifacts/figures/`, `artifacts/tables/` | Reserved locations for caller-managed model states and derived presentation outputs | Directory conventions are tracked; generated contents are ignored by Git |
-
-The repository separates version-controlled analytical implementations from study-specific inputs and locally generated run artifacts. Git currently tracks the Python source, preparation scripts, focused regression tests, version-pinned requirements list, README, and empty data/artifact directory markers. Station records, prepared tables, experiment configuration values, trained weights, and completed result files are supplied or created locally. This keeps the model and evaluation logic inspectable while making the additional material required for a particular run explicit.
-
-The focused test module [`tests/test_manuscript_alignment.py`](tests/test_manuscript_alignment.py) checks the four-term DRC objective, fixed modifier bound, model-specific requirement contract, transition construction, 120-day fallback, and two-baseline summaries without research data. A dependency-light synthetic check, `validate_recording_backend_contract()`, separately verifies experiment call order, reuse of training-derived stage requirements, and sequential rollout trace. Data-dependent training, regional projection, and paper-result regeneration require the corresponding external inputs and model provider.
-
 ## Citation and contact
 
 Please cite the accompanying manuscript:
