@@ -4,6 +4,10 @@ Supporting code for *Learning corrections to prescribed photothermal responses i
 
 This repository provides the scientific models, shared rollout logic, evaluation utilities, regional-analysis modules, and input-preparation scripts that support the accompanying study. It is organized so that readers can trace how observations and environmental drivers enter the analysis, how each model changes daily phenological development, and where locally generated evidence is recorded.
 
+![Scientific framework: a bounded learned modifier corrects PBM-PT daily development rates before accumulation to unit progress; four models are evaluated through sequential rollout and three generalization tasks.](docs/assets/scientific-framework.svg)
+
+*Conceptual framework. DRC and CDRC correct the PBM-PT backbone with a modifier bounded by `[e^-2, e^2]`. Curves are schematic illustrations, not experimental results. [Open the full-size figure](docs/assets/scientific-framework.svg).*
+
 ## Overview
 
 The study asks whether a learned modifier of process-derived daily DVR can improve phenological-stage prediction while retaining an explicit accumulated-development model. The modifier is strictly positive but can either decrease (`m < 1`) or increase (`m > 1`) the photothermal backbone DVR. All four study models use the same five ordered transitions - reviving-to-tillering, tillering-to-jointing, jointing-to-booting, booting-to-heading, and heading-to-maturity - and the same completion rule: accumulate daily progress for up to 120 days, select the first day that crosses the transition requirement, or otherwise use the final valid day, then start the next transition on the following day.
@@ -177,6 +181,7 @@ Only paths tracked in Git are shown here. The committed `data/` and `artifacts/`
 |-- README.md
 |-- requirements.txt
 |-- tests/                    # manuscript-alignment regression tests
+|-- docs/assets/              # editable scientific framework illustration
 |-- src/rice_phenology_hypernet/
 |   |-- data/                 # station I/O and daylength
 |   |-- models/               # process and learned DVR models
