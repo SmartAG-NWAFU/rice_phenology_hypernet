@@ -70,13 +70,6 @@ The manuscript defines the scientific names and roles in the four-model ladder; 
 
 The study weather sequence is daily mean, minimum, and maximum air temperature, astronomical daylength, and precipitation, represented in code as `TemAver`, `TemMin`, `TemMax`, `daylength`, and `Precipitation`. Both learned models correct the PBM-PT backbone DVR. The implemented DRC objective follows four components: event timing, terminal progress, shrinkage toward an unchanged modifier, and temporal smoothness. CDRC adds gate-prior and gate-monotonicity penalties.
 
-<details>
-<summary>Model identifiers outside the current registry</summary>
-
-The manuscript model ladder and tracked `main` registry correspond one-to-one as shown above. Neither source defines study models named `m1_dvr` or `m3_direct`, so those identifiers are not presented as paper terminology or current workflow options.
-
-</details>
-
 ### Evaluation design
 
 The experiment runner enforces the parts of the evaluation that must remain comparable across models:
@@ -86,35 +79,14 @@ The experiment runner enforces the parts of the evaluation that must remain comp
 3. Fit a learned model when the selected model requires one.
 4. Construct stage inputs, calculate base DVR, and obtain any learned modifier.
 5. Correct and accumulate daily DVR, take the first unit-progress crossing, and advance sequentially.
-6. Return predictions, scores, and an audit record containing task, model, seed, call order, and fold provenance.
-
-The manuscript and repository task identifiers correspond as follows:
-
-| Repository task | Manuscript task | Scientific purpose | Manuscript split design |
-| --- | --- | --- | --- |
-| `sample` | Random site-year | Interpolation | Five-fold random split of complete site-year records |
-| `site` | Unseen-site | Spatial transfer | Five-fold site-grouped split; entire sites are held out, and test years must occur in the training fold |
-| `year` | Later-year | Temporal transfer | Expanding-window rolling origin: 1984-1990 to 1991-1995, 1984-1995 to 1996-1998, and 1984-1998 to 1999-2010; test stations must occur in the corresponding training period |
 
 All transitions from one site-year remain in the same partition. Within each outer fold, thermal requirements for PBM-T and photothermal requirements for PBM-PT, DRC, and CDRC are estimated only from training records. The manuscript further specifies internal validation for learned-model checkpoint selection, training sequences of up to 120 days, and a 120-day rollout search window, with the final valid day used when a transition does not cross its threshold. The public process models, tensor crossing helper, generic experiment runner, and regional projection path implement this same limit and fallback rule. The runner delegates split construction, sequence construction, fitting, internal validation, and scoring to `DvrWorkflowBackend`; a concrete study backend and experiment configuration are therefore required to instantiate the exact task splits and fitting protocols.
 
-Metrics are MAE, RMSE, mean signed bias, and R-squared for tillering, jointing, booting, heading, and maturity, with an across-stage mean. The repository metric frame additionally carries sample count. Relative-change tables report DRC and CDRC against both `m0_t` (PBM-T) and `m0_dvr` (PBM-PT), matching the manuscript's baseline comparisons.
+Metrics are MAE, RMSE, mean signed bias, and R-squared for tillering, jointing, booting, heading, and maturity, with an across-stage mean. 
 
-After outer-fold evaluation, the manuscript refits separate deployment models using all retained records. These fixed models support two downstream analyses: controlled perturbations of the CDRC response and a bounded regional comparison. The current public tree retains CDRC forward outputs needed to inspect corrected DVR, but it does not contain a dedicated perturbation-analysis workflow. The regional path is implemented: it applies all four deployment models over the 2003-2007 middle-rice grid, initializes reviving at five days after transplanting, averages annual predictions into a climatology, and compares heading and maturity DOY with ChinaRiceCalendar. This regional comparison assesses broad spatial transfer and does not establish reliable grid-cell prediction.
+After outer-fold evaluation, the manuscript refits separate deployment models using all retained records. These fixed models support two downstream analyses: controlled perturbations of the CDRC response and a bounded regional comparison.
 
 ## Evidence map and data flow
-
-### Scientific traceability
-
-| Scientific role | Repository implementation | Main interface | Generated evidence |
-| --- | --- | --- | --- |
-| PBM-T and PBM-PT process backbones | [`models/physics.py`](src/rice_phenology_hypernet/models/physics.py), [`models/m0.py`](src/rice_phenology_hypernet/models/m0.py) | `M0TPhenologyModel` (`m0_t`), `M0PhenologyModel` (`m0_dvr`) | Inverted transition-requirement samples and process stage predictions |
-| DRC and CDRC learned modifiers | [`models/m1_v2_dvr.py`](src/rice_phenology_hypernet/models/m1_v2_dvr.py), [`models/m1_dvr_con.py`](src/rice_phenology_hypernet/models/m1_dvr_con.py) | `M1V2DvrModel` (`m1_v2_dvr`), `M1ConDvrModel` (`m1_dvr_con`) | Modifier, corrected-DVR, cumulative-progress, and smooth-completion tensors |
-| Fold-isolated experiment rollout | [`experiments/runner_dvr.py`](src/rice_phenology_hypernet/experiments/runner_dvr.py) | `run_dvr_experiment`, `DvrWorkflowBackend` | `DvrExperimentBundle` with predictions, metrics, and audit metadata |
-| Stage evaluation and comparison | [`evaluation/metrics.py`](src/rice_phenology_hypernet/evaluation/metrics.py), [`experiments/dvr_summary.py`](src/rice_phenology_hypernet/experiments/dvr_summary.py) | `calculate_metrics_frame`, `build_dvr_relative_change_summary` | Per-stage metric frames and DVR relative-change CSV files |
-| Controlled CDRC response inspection | [`models/m1_dvr_con.py`](src/rice_phenology_hypernet/models/m1_dvr_con.py) | `M1ConDvrModel.forward` | Daily modifier and corrected-DVR tensors; the manuscript's complete perturbation workflow is not tracked |
-| Regional consistency analysis | [`regional_grid_projection.py`](src/rice_phenology_hypernet/experiments/regional_grid_projection.py), [`regional_grid_analysis.py`](src/rice_phenology_hypernet/experiments/regional_grid_analysis.py) | `prepare_regional_grid_inputs`, `run_regional_grid_projection`, `analyze_regional_grid_projection` | 2003-2007 point-year predictions, climatology tables, heading/maturity metrics, and JSON metadata |
-| Run identity and provenance | [`runtime.py`](src/rice_phenology_hypernet/runtime.py) | `initialize_run`, `register_experiment`, `update_run_metadata` | Timestamped run directories, `latest.json`, config snapshots when available, and `run_manifest.json` |
 
 ### Repository evidence and provenance flow
 
@@ -250,7 +222,7 @@ from rice_phenology_hypernet.experiments.runner_dvr import (
 )
 
 # Manuscript mapping: site = unseen-site task; m1_dvr_con = CDRC.
-spec = ExperimentSpec(task="site", model_name="m1_dvr_con", seed=42)
+spec = ExperimentSpec(task="site", model_name="m1_dvr_con")
 bundle = run_dvr_experiment(spec=spec, config=config, backend=backend)
 
 predictions = bundle.predictions
@@ -304,7 +276,7 @@ The manuscript also reports a 2-15 day sensitivity analysis for the reviving off
 
 | Path or object | Content | Provenance behavior |
 | --- | --- | --- |
-| `DvrExperimentBundle` | In-memory prediction and metric frames plus audit metadata | Records task, model, seed, call order, fold id, and training-only requirement source |
+| `DvrExperimentBundle` | In-memory prediction and metric frames plus audit metadata | Records task, model, call order, fold id, and training-only requirement source |
 | `artifacts/eval/<run_id>/run_manifest.json` | Run identity and registered experiment or regional metadata | Created and updated by `runtime.py`; paths inside the repository are stored relatively where possible |
 | `artifacts/eval/latest.json` | Most recently initialized run id | Updated only when run initialization requests it |
 | `artifacts/eval/<run_id>/config_snapshot/` | Copies of available `configs/*.yaml` at run initialization | Empty when no configuration files are supplied locally |
@@ -315,16 +287,6 @@ The manuscript also reports a 2-15 day sensitivity analysis for the reviving off
 The repository separates version-controlled analytical implementations from study-specific inputs and locally generated run artifacts. Git currently tracks the Python source, preparation scripts, focused regression tests, version-pinned requirements list, README, and empty data/artifact directory markers. Station records, prepared tables, experiment configuration values, trained weights, and completed result files are supplied or created locally. This keeps the model and evaluation logic inspectable while making the additional material required for a particular run explicit.
 
 The focused test module [`tests/test_manuscript_alignment.py`](tests/test_manuscript_alignment.py) checks the four-term DRC objective, fixed modifier bound, model-specific requirement contract, transition construction, 120-day fallback, and two-baseline summaries without research data. A dependency-light synthetic check, `validate_recording_backend_contract()`, separately verifies experiment call order, reuse of training-derived stage requirements, and sequential rollout trace. Data-dependent training, regional projection, and paper-result regeneration require the corresponding external inputs and model provider.
-
-### Verification status for this revision
-
-| Verification level | Checked material |
-| --- | --- |
-| Executed without study data | Package import; 20 manuscript-alignment regression tests; synthetic workflow contract; `--help` for calendar extraction, raster coarsening, calendar download, regional weather download, and weather standardization; Dataverse `--dry-run` metadata retrieval |
-| Statically checked against source | Manuscript title, study population, model terminology, transition definitions, evaluation splits, metrics, deployment analyses, and scope; repository model registry and forward paths; data schemas; programmatic interfaces; output filenames; internal Markdown links; Mermaid structure and accessibility directives |
-| Not executed in this repository snapshot | Raster extraction, weather standardization, model fitting, station evaluation, and regional projection, because their research inputs, experiment objects, or trained model provider are not tracked |
-
-No local Mermaid renderer was available during this documentation revision; both diagrams use GitHub-supported `flowchart` syntax and were checked statically rather than rendered locally.
 
 ## Citation and contact
 
