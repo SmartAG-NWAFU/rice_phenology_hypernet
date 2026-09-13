@@ -6,7 +6,7 @@ This repository provides the scientific models, shared rollout logic, evaluation
 
 ![Scientific framework: a bounded learned modifier corrects PBM-PT daily development rates before accumulation to unit progress; four models are evaluated through sequential rollout and three generalization tasks.](docs/assets/scientific-framework.png)
 
-*Conceptual framework. DRC and CDRC correct the PBM-PT backbone with a modifier bounded by `[e^-2, e^2]`. Curves are schematic illustrations, not experimental results. [Open the full-size figure](docs/assets/scientific-framework.png).*
+*Conceptual framework. DRC and CDRC correct the PBM-PT backbone with a modifier bounded by `[e^-2, e^2]`. Plant forms illustrate the six rollout stages; plants and curves are schematic, not experimental results. [Open the full-size figure](docs/assets/scientific-framework.png).*
 
 ## Overview
 
