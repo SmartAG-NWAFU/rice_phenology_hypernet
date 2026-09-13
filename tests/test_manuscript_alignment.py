@@ -5,7 +5,6 @@ from inspect import signature
 from math import exp
 from pathlib import Path
 from runpy import run_path
-
 import numpy as np
 import pandas as pd
 import pytest
